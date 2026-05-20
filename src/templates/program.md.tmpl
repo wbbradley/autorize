@@ -1,0 +1,16 @@
+# {{experiment_name}}
+
+Write your agent instructions here. This file is passed to the agent on every
+iteration as the freeform "program" — the steady, project-specific guidance
+about *what to improve and how*. The harness appends a compact context block
+(last 10 iterations, best diff so far, current iteration number and budget)
+at run time.
+
+Tips:
+- Be specific about what counts as an improvement. The objective command
+  defines the score; this file is where you tell the agent why that score
+  exists and what kinds of changes tend to move it.
+- Call out files or directories the agent should focus on (and which it
+  should leave alone — note that deny_paths is also enforced by diff).
+- Karpathy's playbook: short, dense, and edited as you learn what the agent
+  keeps getting wrong.

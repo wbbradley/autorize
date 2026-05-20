@@ -1,0 +1,11 @@
+# Cargo
+/target
+Cargo.lock.bak
+
+# Editor / OS noise
+*.swp
+*.swo
+.DS_Store
+
+# Per-iteration worktree dirs (not part of the durable log)
+.autorize/*/iter-*/wt

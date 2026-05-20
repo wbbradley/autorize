@@ -1,0 +1,73 @@
+# autorize experiment configuration
+#
+# Top-level experiment metadata.
+[experiment]
+name = "{{experiment_name}}"
+description = ""
+
+# Objective: the command that produces a score for an iteration.
+#
+# `direction` is "min" or "max". `parse` is one of:
+#   { kind = "float" }                              # stdout is the score
+#   { kind = "regex", pattern = "score=([0-9.]+)" } # first capture group
+#   { kind = "jq", path = ".metrics.bpb" }          # JSON path lookup
+#
+# `fail_mode` controls what happens when scoring fails:
+#   "invalid" — discard the iteration, don't count it (default)
+#   "worst"   — treat as the worst possible score
+#   "abort"   — stop the whole run
+[objective]
+command = "bash score.sh"
+direction = "min"
+parse = { kind = "float" }
+timeout = "60s"
+fail_mode = "invalid"
+
+# Path boundaries.
+#
+# `allow_paths` is prompt-only in v1 (mentioned to the agent, not enforced).
+# `deny_paths` is ENFORCED: an iteration whose diff touches any deny pattern
+# is discarded.
+[boundaries]
+allow_paths = ["src/**/*", "README.md"]
+deny_paths = [".autorize/**", "*.lock"]
+
+# One-time setup before each iteration's agent invocation (inside the worktree).
+[setup]
+command = ""
+timeout = "5m"
+
+# One-time teardown after each iteration's agent invocation (inside the worktree).
+[teardown]
+command = ""
+timeout = "1m"
+
+# Iteration knobs.
+#
+# `budget` is the hard wall-clock per agent invocation; 0 disables max-iters.
+# `keep_worktrees` retains the per-iter worktree dirs for debugging.
+# `max_consecutive_noops` aborts after this many no-change iterations.
+[iteration]
+budget = "5m"
+max_iterations = 0
+keep_worktrees = false
+max_consecutive_noops = 5
+
+# Run schedule. Set EXACTLY ONE of `total_budget` (duration) or
+# `deadline` (absolute time, RFC3339).
+[schedule]
+total_budget = "4h"
+# deadline = "2026-05-21T09:00:00-07:00"
+
+# Agent invocation.
+#
+# `command` may contain {prompt_file}, {workdir}, {iter} placeholders.
+# `stdin` is "none" (use {prompt_file}) or "prompt" (pipe prompt on stdin).
+# `env` values starting with `$` are expanded from the parent environment.
+[agent]
+command = "claude --print {prompt_file}"
+workdir_var = "AUTORIZE_WORKDIR"
+stdin = "none"
+
+[agent.env]
+ANTHROPIC_API_KEY = "$ANTHROPIC_API_KEY"
