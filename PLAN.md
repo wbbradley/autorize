@@ -199,22 +199,6 @@ disagreement. Tolerate torn last line. Refuse if `base_commit` missing.
 
 ## Next Up
 
-### Phase 4 — Storage + Prompt + Iteration
-
-Implement `src/storage.rs` (atomic `state.json`, append-only `iterations.jsonl` with fsync,
-torn-line tolerance), `src/prompt.rs` (build prompt from `program.md` + history + boundaries +
-best diff), and `src/iteration.rs` (the state machine wiring scoring/worktree/agent/storage
-together, with explicit `current_step` checkpointing).
-
-**Acceptance:**
-- Atomic state.json: kill mid-write, file is either old or new contents, never partial.
-- jsonl: 100 appends survive a crash; reader drops a torn final line.
-- Prompt rendering: snapshot test of a representative prompt with mock history.
-- End-to-end iteration test: one iteration executes Idle -> ... -> Record against a mock agent
-  that edits a tracked file, with score improvement -> merged outcome.
-
----
-
 ### Phase 5 — CLI run / status / resume + pre-flight
 
 Implement `src/cli/run.rs` (pre-flight checks, main loop until deadline), `src/cli/status.rs`

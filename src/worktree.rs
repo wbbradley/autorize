@@ -130,6 +130,14 @@ impl Git {
         run_git(&["diff", base], wt)
     }
 
+    /// `git add -A` inside a worktree. Phase 4 iteration runs this before
+    /// `diff_paths_against` so deny-path enforcement catches untracked new
+    /// files the agent created (plain `git diff` skips untracked content).
+    pub fn stage_all_in(&self, wt: &Path) -> Result<()> {
+        run_git(&["add", "-A"], wt)?;
+        Ok(())
+    }
+
     pub fn diff_paths_against(&self, wt: &Path, base: &str) -> Result<Vec<String>> {
         let out = run_git(&["diff", "--name-only", base], wt)?;
         Ok(out

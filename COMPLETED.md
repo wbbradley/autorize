@@ -87,3 +87,52 @@ parses `deadline`.
 exercising the new pgroup-kill code path.
 
 35 new tests (6 subproc + 11 agent + 18 schedule), suite now 92 passing total. `chk` clean.
+
+## Phase 4 — Storage + Prompt + Iteration (2026-05-20)
+
+Three new modules: `src/storage.rs`, `src/prompt.rs`, `src/iteration.rs` — the integration
+phase that wires Phase 2/3 primitives into the one-iteration state machine + durable
+on-disk record-keeping.
+
+`storage` defines `Outcome` (lowercase serde-rename) and `CurrentStep` enums plus the
+`IterationRecord` / `StateSnapshot` records, with a private `write_atomic(path, &[u8])`
+helper that does the tmp-file + fsync + rename + best-effort directory fsync dance, and
+cleans up the tmp file on any error along the way. `read_state` returns `Ok(None)` on
+NotFound. `append_iteration` opens with `create(true).append(true)`, writes the JSON line
+plus `\n`, then `sync_all()`. `read_iterations` splits by `\n`, drops blank lines, and if
+the last non-empty line fails to parse it's treated as a torn-write tail and dropped
+silently; any other corrupt line surfaces as `Error::Json`.
+
+`prompt::build_prompt` renders deterministically: `program.md` (verbatim, trim_end'd), a
+horizontal-rule separator, a Boundaries section (both allow_paths and deny_paths, with
+`- (none)` when empty), a Recent iterations markdown table (`| {:>4} | {:<9} | {:>10} |`)
+or `No prior iterations.` when empty, a Best iteration block with a `` ```diff `` fence
+holding the verbatim best diff (or `No improvement merged yet.`), and a closing "This
+iteration" stanza with iter number, budget (in seconds), and a min/max direction
+explanation. Score formatting is `{:.5}` for finite values; `inf` / `-inf` for non-finite;
+em-dash for `None`.
+
+`iteration::run_iteration(&IterationInputs, &mut StateSnapshot)` runs one iteration end-to-
+end: AllocateIter → CreateWorktree → RunSetup → BuildPrompt → InvokeAgent → CaptureDiff →
+RunTeardown → Score → Decide → Merge/Discard → Cleanup → Record. Every transition
+checkpoints `current_step` via an atomic `state.json` rewrite, so an external `kill -9`
+between any two steps leaves a parseable file pointing at the last-completed phase.
+Agent stdout/stderr are persisted next to the iter dir for debugging; the captured diff
+also lands at `iter-NNNN/changes.diff`. Outcomes: empty diff → `Noop`; deny-path match →
+`Denied` (scoring skipped); scoring abort → `Error::Config` propagated; scoring fail with
+`fail_mode = invalid` → `Invalid`; score worse than best → `Discarded`; score better →
+`Merged` with a `commit_all_in` advancing the tracking branch. The function returns the
+appended `IterationRecord` and leaves `state.current_step = Idle`, with
+`iterations_completed += 1`, noop counter reset (or incremented), and best updated.
+
+To make deny enforcement see new files (agents that create paths under a deny pattern),
+added `Git::stage_all_in` (`git add -A`) in `src/worktree.rs` and called it before
+`diff_paths_against` / `diff_against` in iteration.rs — `git diff <branch>` alone skips
+untracked content, which would let a new `forbidden/x.txt` slip past.
+
+19 new tests: 8 storage (atomic overwrites + stray-tmp doesn't corrupt + missing-returns-None
++ JSON round-trip + 100-append + torn-last-line tolerance × 2 + corrupt-middle-line errors),
+6 prompt (program-md verbatim + boundaries lists + no-history/no-best messages + history
+table + best diff fence + full snapshot), and 5 iteration (merged on improvement against a
+real git repo + awk-based `score.sh`, plus the noop/denied/discarded/invalid outcomes).
+Suite is now 111 passing total. `chk` clean.
