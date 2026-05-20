@@ -48,3 +48,42 @@ the worktree's checked-out ref with an explicit `-c user.email=autorize@local
 their failure modes, a 200 ms timeout that finishes in under 2 s, a 256 KB-output pipe-drain
 proof, every fail-mode/direction combination, and end-to-end git worktree
 add/list/commit/remove against real `git` invocations in tempdirs. `chk` is clean.
+
+## Phase 3 — Schedule + Agent (2026-05-20)
+
+Added `chrono` (with `serde`) and `nix` (with `signal`, `process`) via `cargo add`. Three new
+modules: `src/subproc.rs`, `src/agent.rs`, `src/schedule.rs`. Extended `src/error.rs` with a
+new `Subproc(String)` variant and a `Schedule(String)` variant; removed the now-unused
+`Scoring(String)` variant.
+
+`subproc::run_command_with_budget` is the shared "spawn `bash -lc <cmd>` in a new session,
+drain stdout/stderr in background threads, kill the whole process group on budget expiry"
+primitive. It calls `setsid(2)` inside `Command::pre_exec` (async-signal-safe), so the
+resulting pgid equals the bash pid; on timeout it sends `SIGTERM` via `killpg`, waits up to
+5 s, then `SIGKILL`. The smoking test (`kills_grandchildren_via_pgroup`) spawns
+`sleep 30 & echo $! >pidfile; wait`, then asserts the recorded grandchild pid no longer
+exists (`kill(pid, None)` -> `ESRCH`) within 3 s of budget expiry — proving the pgroup kill
+reaches grandchildren that a plain `child.kill()` would orphan.
+
+`agent::run_agent` wraps the subproc primitive: substitutes `{prompt_file}`, `{workdir}`,
+`{iter}` in `agent.command`; expands `$NAME`/`${NAME}` (one-pass byte scanner, with
+`[A-Za-z_][A-Za-z0-9_]*` name rule, unset -> empty, literal `$` preserved when not followed
+by a name char) in every `agent.env` value against the parent process env; injects
+`AUTORIZE_WORKDIR` (or the user-overridden var name); and delivers the prompt either as a
+file argument or piped to stdin per `agent.stdin`. Parent env passes through automatically
+(`Command` doesn't `env_clear`), with `agent.env` overlaid.
+
+`schedule::Deadline` is a thin `DateTime<Utc>` newtype with `at`/`is_expired`/`remaining`
+helpers (saturates to zero past the deadline). `parse_deadline_expr` accepts three forms:
+humantime durations (`"4h"`, `"30m"`), RFC3339 timestamps, and a tiny natural-language
+grammar — `tomorrow`, `today`, `[tomorrow|today] <time>`, or bare `<time>` (rolls to the
+next occurrence). The time parser handles `9am`, `9pm`, `9:30am`, `09:30` (24h), `14:30`,
+`12am`/`12pm` (midnight/noon). `compute_deadline` picks `total_budget` if set, otherwise
+parses `deadline`.
+
+`scoring::run_with_timeout`'s body collapsed to a one-call delegate to
+`subproc::run_command_with_budget` (signature unchanged); the spawn-failure arm in
+`score()` now matches `Error::Subproc(_)`. All previous scoring tests keep passing, now
+exercising the new pgroup-kill code path.
+
+35 new tests (6 subproc + 11 agent + 18 schedule), suite now 92 passing total. `chk` clean.

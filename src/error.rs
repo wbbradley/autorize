@@ -16,8 +16,10 @@ pub enum Error {
     TomlSer(#[from] toml::ser::Error),
     #[error("git: {0}")]
     Git(String),
-    #[error("scoring: {0}")]
-    Scoring(String),
+    #[error("subproc: {0}")]
+    Subproc(String),
+    #[error("schedule: {0}")]
+    Schedule(String),
     #[error("regex: {0}")]
     Regex(#[from] regex::Error),
     #[error("globset: {0}")]

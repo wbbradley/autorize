@@ -1,13 +1,9 @@
-use std::{
-    io::Read,
-    path::Path,
-    process::{Command, Stdio},
-    time::{Duration, Instant},
-};
+use std::{collections::BTreeMap, path::Path, time::Duration};
 
 use crate::{
     config::{Direction, FailMode, Objective, ParseSpec},
     error::{Error, Result},
+    subproc,
 };
 
 #[derive(Debug)]
@@ -43,7 +39,7 @@ pub fn score(workdir: &Path, obj: &Objective) -> Result<ScoreOutput> {
     let (exit_code, stdout, stderr, timed_out) =
         match run_with_timeout(&obj.command, workdir, obj.timeout) {
             Ok(v) => v,
-            Err(Error::Scoring(msg)) => {
+            Err(Error::Subproc(msg)) => {
                 return Ok(ScoreOutput {
                     score: None,
                     failure: Some(ScoreFailure::Spawn(msg)),
@@ -160,64 +156,21 @@ fn parse_jq(s: &str, path: &str) -> std::result::Result<f64, ScoreFailure> {
         .ok_or_else(|| ScoreFailure::Parse(format!("jq path {path:?} value is not a number")))
 }
 
-// Spawn `bash -lc <command>`, drain stdout/stderr in background threads (so a
-// child filling the 64 KB pipe buffer can't deadlock the polling loop), poll
-// `try_wait`, and on timeout call `child.kill()` then reap. Phase 3 upgrades
-// the kill to a process-group SIGTERM/SIGKILL via `nix`; this simple version
-// is sufficient for short objective commands.
+// Delegates to `subproc::run_command_with_budget` so objective subprocesses
+// share the same SIGTERM-pgroup-then-SIGKILL kill path as the agent (and
+// can't orphan grandchildren). Phase 3 refactor.
 fn run_with_timeout(
     command: &str,
     workdir: &Path,
     timeout: Duration,
 ) -> Result<(Option<i32>, String, String, bool)> {
-    let mut child = Command::new("bash")
-        .arg("-lc")
-        .arg(command)
-        .current_dir(workdir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| Error::Scoring(format!("spawn failed: {e}")))?;
-
-    let mut stdout_pipe = child.stdout.take().expect("stdout was piped");
-    let mut stderr_pipe = child.stderr.take().expect("stderr was piped");
-
-    let stdout_handle = std::thread::spawn(move || {
-        let mut buf = String::new();
-        let _ = stdout_pipe.read_to_string(&mut buf);
-        buf
-    });
-    let stderr_handle = std::thread::spawn(move || {
-        let mut buf = String::new();
-        let _ = stderr_pipe.read_to_string(&mut buf);
-        buf
-    });
-
-    let start = Instant::now();
-    let mut timed_out = false;
-    let status = loop {
-        match child.try_wait()? {
-            Some(s) => break s,
-            None => {
-                if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    timed_out = true;
-                    break child.wait()?;
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-        }
-    };
-
-    let stdout = stdout_handle.join().unwrap_or_default();
-    let stderr = stderr_handle.join().unwrap_or_default();
-    Ok((status.code(), stdout, stderr, timed_out))
+    let out = subproc::run_command_with_budget(command, workdir, timeout, &BTreeMap::new(), None)?;
+    Ok((out.exit_code, out.stdout, out.stderr, out.timed_out))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use tempfile::tempdir;
 

@@ -1,8 +1,11 @@
+mod agent;
 mod cli;
 mod config;
 mod error;
 mod experiment;
+mod schedule;
 mod scoring;
+mod subproc;
 mod templates;
 mod worktree;
 
