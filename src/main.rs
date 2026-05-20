@@ -2,7 +2,9 @@ mod cli;
 mod config;
 mod error;
 mod experiment;
+mod scoring;
 mod templates;
+mod worktree;
 
 use clap::Parser;
 

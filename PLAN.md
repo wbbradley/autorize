@@ -199,24 +199,13 @@ disagreement. Tolerate torn last line. Refuse if `base_commit` missing.
 
 ## Next Up
 
-### Phase 2 — Scoring + Worktree
-
-Implement `src/scoring.rs` (run objective.command with timeout, parse float/regex/jq) and
-`src/worktree.rs` (shell out to git for worktree add/remove/merge/diff). Unit-tested in isolation.
-
-**Acceptance:**
-- All three parse variants work, including fail paths -> `Option<f64>` semantics with `fail_mode`.
-- Worktree module creates, lists, merges (ff-only), and removes worktrees against a throwaway
-  test repo.
-- Diff inspection helper returns the set of touched paths (for deny_paths enforcement).
-
----
-
 ### Phase 3 — Schedule + Agent
 
 Implement `src/schedule.rs` (parse `"4h"` / `"2026-05-21T09:00:00-07:00"` / `"tomorrow 9am"`,
 compute deadlines, check expiration) and `src/agent.rs` (process group spawn with SIGTERM/SIGKILL
-budget kill, env passthrough/expansion, prompt-file vs stdin delivery).
+budget kill, env passthrough/expansion, prompt-file vs stdin delivery). Once `nix` is added,
+upgrade `scoring::run_with_timeout`'s simple `child.kill()` to the same process-group kill so
+objective subprocesses can't orphan grandchildren either.
 
 **Acceptance:**
 - Schedule math: deadline computation correct for all three forms; expiration check correct.
@@ -225,6 +214,7 @@ budget kill, env passthrough/expansion, prompt-file vs stdin delivery).
 - Env passthrough: `$VAR` references in `agent.env` are expanded from the parent environment.
 - Both `agent.stdin = "none"` (via `{prompt_file}`) and `agent.stdin = "prompt"` (via stdin)
   deliver the prompt correctly.
+- `scoring::run_with_timeout` uses the same process-group kill helper.
 
 ---
 

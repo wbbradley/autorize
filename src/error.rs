@@ -14,6 +14,16 @@ pub enum Error {
     TomlDe(#[from] toml::de::Error),
     #[error("toml serialize: {0}")]
     TomlSer(#[from] toml::ser::Error),
+    #[error("git: {0}")]
+    Git(String),
+    #[error("scoring: {0}")]
+    Scoring(String),
+    #[error("regex: {0}")]
+    Regex(#[from] regex::Error),
+    #[error("globset: {0}")]
+    Globset(#[from] globset::Error),
+    #[error("json: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
