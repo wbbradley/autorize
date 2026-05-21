@@ -3,8 +3,8 @@
 This document is printed by `autorize llms`. It is meant for LLM/agent
 consumers landing in a repository that uses `autorize`. Everything an agent
 needs to drive `autorize init` → edit config → `autorize run` →
-`autorize status` / `autorize resume` is here. No source code reading
-required.
+`autorize status` / `autorize resume` is here. No
+[source code](https://github.com/wbbradley/autorize) reading required.
 
 ## 1. What `autorize` is
 

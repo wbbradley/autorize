@@ -26,6 +26,8 @@ pub enum Error {
     Globset(#[from] globset::Error),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("another autorize run holds the lock at {path}{detail}")]
+    Locked { path: PathBuf, detail: String },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
