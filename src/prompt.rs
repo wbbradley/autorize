@@ -135,23 +135,12 @@ fn direction_explanation(d: Direction) -> &'static str {
 fn format_score_cell(s: Option<f64>) -> String {
     match s {
         None => "\u{2014}".to_string(),
-        Some(v) if v == f64::INFINITY => "inf".to_string(),
-        Some(v) if v == f64::NEG_INFINITY => "-inf".to_string(),
-        Some(v) if v.is_nan() => "NaN".to_string(),
         Some(v) => format!("{v:.5}"),
     }
 }
 
 fn format_score_inline(v: f64) -> String {
-    if v == f64::INFINITY {
-        "inf".to_string()
-    } else if v == f64::NEG_INFINITY {
-        "-inf".to_string()
-    } else if v.is_nan() {
-        "NaN".to_string()
-    } else {
-        format!("{v:.5}")
-    }
+    format!("{v:.5}")
 }
 
 #[cfg(test)]

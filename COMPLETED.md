@@ -253,3 +253,51 @@ and fail-modes, all 5 subcommand names, and all 16 `CurrentStep` variants.
 README gets a one-line entry in the Subcommands table pointing at
 `autorize llms`. 6 new unit tests bring the suite to 137 unit + 4 e2e = 141
 passing. `chk` clean.
+
+## `fail_mode = "worst"` JSON round-trip + non-finite score rejection (2026-05-20)
+
+Two coordinated fixes in `src/scoring.rs` that close one high-severity
+data-integrity bug and one correctness bug together.
+
+Replaced the `apply_fail_mode` "worst" sentinels: `f64::INFINITY` →
+`f64::MAX` for `Direction::Min`, `f64::NEG_INFINITY` → `f64::MIN` for
+`Direction::Max`. `serde_json` serializes non-finite f64 as JSON `null`, which
+`Option<f64>` reads back as `None` — so the previous infinity sentinel was
+silently lost across every `state.json` rewrite and every `iterations.jsonl`
+record. Concretely: the first "worst" iter was recorded as `"merged"` with
+`score: null`, and on the next iter `best_score = None` meant any subsequent
+score trivially "improved", defeating the whole point of `fail_mode = "worst"`.
+The finite sentinels round-trip cleanly and still satisfy `s < f64::MAX` (or
+`s > f64::MIN`) for every plausible real score.
+
+Added a `finite_or_parse_err(f64) -> Result<f64, ScoreFailure>` helper and
+applied it in `parse_float`, `parse_regex`, and `parse_jq`, so user-produced
+`NaN`/`±inf` from scorer stdout now becomes a `ScoreFailure::Parse("non-finite
+score: ...")` at parse time. That routes through the configured `fail_mode`
+exactly the way every other scoring failure does (the correct place to declare
+"what happens when no score can be obtained"). It also fixes the second
+PLAN.md item — a `NaN` first iter used to "merge" because `best = None`, and
+thereafter every comparison against NaN was false, so every subsequent score
+was discarded and the harness was locked.
+
+Once non-finite values can't reach the formatter, the defensive `INFINITY` /
+`NEG_INFINITY` / `is_nan()` branches in `format_score_cell` and
+`format_score_inline` (`src/prompt.rs`) became dead code and were deleted per
+"don't add fallbacks for scenarios that can't happen". Existing on-disk state
+with `score: null` from the bug still loads fine — `Option<f64>` reads null as
+`None`, no migration needed.
+
+Updated `src/llms.md` section 6 to describe the finite-sentinel behavior
+(no more `+inf`/`-inf` mention). Renamed two existing tests to
+`apply_fail_mode_worst_min_returns_f64_max` / `..._max_returns_f64_min` and
+added `parse_float_rejects_nan`, `parse_float_rejects_inf` (covers `inf`,
+`-inf`, `+Infinity`, `infinity`, `-Infinity`),
+`parse_regex_rejects_nonfinite_capture` (regex captures `NaN` and `inf`), and
+`worst_sentinel_round_trips_through_json` in `src/storage.rs` (asserts the
+serialized line contains no `null` and parses back to `Some(f64::MAX)` /
+`Some(f64::MIN)`). `parse_jq` got a brief comment explaining why a non-finite
+test there is impractical — `serde_json` rejects literal `NaN`/`Infinity` JSON
+at parse time, so any number it accepts is already finite; the
+`finite_or_parse_err` check stays for defense-in-depth.
+
+6 new tests (135 unit + 4 e2e = 139 passing total). `chk` clean.

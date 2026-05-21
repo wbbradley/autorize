@@ -266,6 +266,35 @@ mod tests {
     }
 
     #[test]
+    fn worst_sentinel_round_trips_through_json() {
+        // The finite sentinels used by `fail_mode = "worst"` (f64::MAX for
+        // direction = min, f64::MIN for direction = max) must survive a
+        // JSON round-trip — serde_json serializes non-finite f64 as `null`,
+        // which Option<f64> would then read back as None, silently breaking
+        // the next iteration's improvement comparison.
+        for sentinel in [f64::MAX, f64::MIN] {
+            let mut rec = sample_record(1);
+            rec.score = Some(sentinel);
+            rec.best_so_far = Some(sentinel);
+            let line = serde_json::to_string(&rec).unwrap();
+            assert!(
+                !line.contains("null"),
+                "sentinel {sentinel} serialized as null: {line}"
+            );
+            let back: IterationRecord = serde_json::from_str(&line).unwrap();
+            assert_eq!(back.score, Some(sentinel));
+            assert_eq!(back.best_so_far, Some(sentinel));
+        }
+
+        let mut state = sample_state();
+        state.best_score = Some(f64::MAX);
+        let text = serde_json::to_string(&state).unwrap();
+        assert!(!text.contains("\"best_score\":null"), "got: {text}");
+        let back: StateSnapshot = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.best_score, Some(f64::MAX));
+    }
+
+    #[test]
     fn read_iterations_errors_on_corrupt_middle_line() {
         let dir = tempdir().unwrap();
         let p = dir.path().join("iterations.jsonl");

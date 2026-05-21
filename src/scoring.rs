@@ -84,9 +84,13 @@ pub fn apply_fail_mode(out: &ScoreOutput, obj: &Objective) -> ScoreDecision {
     }
     match obj.fail_mode {
         FailMode::Invalid => ScoreDecision::Discard,
+        // Use finite sentinels (f64::MAX/MIN) rather than +/-infinity so the
+        // value round-trips through JSON (serde_json serializes non-finite f64
+        // as `null`, which Option<f64> then reads back as None, losing the
+        // sentinel and silently breaking comparison/persistence).
         FailMode::Worst => match obj.direction {
-            Direction::Min => ScoreDecision::Use(f64::INFINITY),
-            Direction::Max => ScoreDecision::Use(f64::NEG_INFINITY),
+            Direction::Min => ScoreDecision::Use(f64::MAX),
+            Direction::Max => ScoreDecision::Use(f64::MIN),
         },
         FailMode::Abort => {
             let reason = match &out.failure {
@@ -111,9 +115,19 @@ fn parse_score(stdout: &str, spec: &ParseSpec) -> std::result::Result<f64, Score
 }
 
 fn parse_float(s: &str) -> std::result::Result<f64, ScoreFailure> {
-    s.trim()
+    let v = s
+        .trim()
         .parse::<f64>()
-        .map_err(|e| ScoreFailure::Parse(format!("not a float: {e}")))
+        .map_err(|e| ScoreFailure::Parse(format!("not a float: {e}")))?;
+    finite_or_parse_err(v)
+}
+
+fn finite_or_parse_err(v: f64) -> std::result::Result<f64, ScoreFailure> {
+    if v.is_finite() {
+        Ok(v)
+    } else {
+        Err(ScoreFailure::Parse(format!("non-finite score: {v}")))
+    }
 }
 
 fn parse_regex(s: &str, pattern: &str) -> std::result::Result<f64, ScoreFailure> {
@@ -126,9 +140,11 @@ fn parse_regex(s: &str, pattern: &str) -> std::result::Result<f64, ScoreFailure>
         .get(1)
         .ok_or_else(|| ScoreFailure::Parse(format!("regex {pattern:?} has no capture group")))?;
     let text = m.as_str();
-    text.trim()
+    let v = text
+        .trim()
         .parse::<f64>()
-        .map_err(|e| ScoreFailure::Parse(format!("capture {text:?} not a float: {e}")))
+        .map_err(|e| ScoreFailure::Parse(format!("capture {text:?} not a float: {e}")))?;
+    finite_or_parse_err(v)
 }
 
 fn parse_jq(s: &str, path: &str) -> std::result::Result<f64, ScoreFailure> {
@@ -151,9 +167,14 @@ fn parse_jq(s: &str, path: &str) -> std::result::Result<f64, ScoreFailure> {
             vals.len()
         )));
     }
-    vals[0]
+    let v = vals[0]
         .as_f64()
-        .ok_or_else(|| ScoreFailure::Parse(format!("jq path {path:?} value is not a number")))
+        .ok_or_else(|| ScoreFailure::Parse(format!("jq path {path:?} value is not a number")))?;
+    // Note: serde_json rejects literal `NaN` / `Infinity` JSON at parse time
+    // and any numeric literal it does accept fits in finite f64, so a
+    // dedicated parse_jq non-finite test is not practical. We still run the
+    // finite check here for defense-in-depth.
+    finite_or_parse_err(v)
 }
 
 // Delegates to `subproc::run_command_with_budget` so objective subprocesses
@@ -203,6 +224,26 @@ mod tests {
     }
 
     #[test]
+    fn parse_float_rejects_nan() {
+        let e = parse_float("NaN").unwrap_err();
+        match e {
+            ScoreFailure::Parse(m) => assert!(m.contains("non-finite"), "got: {m}"),
+            _ => panic!("expected Parse"),
+        }
+    }
+
+    #[test]
+    fn parse_float_rejects_inf() {
+        for s in ["inf", "-inf", "+Infinity", "infinity", "-Infinity"] {
+            let e = parse_float(s).unwrap_err();
+            match e {
+                ScoreFailure::Parse(m) => assert!(m.contains("non-finite"), "{s}: got: {m}"),
+                _ => panic!("{s}: expected Parse"),
+            }
+        }
+    }
+
+    #[test]
     fn parse_regex_ok() {
         assert_eq!(
             parse_regex("foo score=2.5 bar", "score=([0-9.]+)").unwrap(),
@@ -230,6 +271,20 @@ mod tests {
         let e = parse_regex("score=abc", "score=([a-z]+)").unwrap_err();
         match e {
             ScoreFailure::Parse(m) => assert!(m.contains("not a float"), "got: {m}"),
+            _ => panic!("expected Parse"),
+        }
+    }
+
+    #[test]
+    fn parse_regex_rejects_nonfinite_capture() {
+        let e = parse_regex("score=NaN", "score=(\\S+)").unwrap_err();
+        match e {
+            ScoreFailure::Parse(m) => assert!(m.contains("non-finite"), "got: {m}"),
+            _ => panic!("expected Parse"),
+        }
+        let e = parse_regex("score=inf", "score=(\\S+)").unwrap_err();
+        match e {
+            ScoreFailure::Parse(m) => assert!(m.contains("non-finite"), "got: {m}"),
             _ => panic!("expected Parse"),
         }
     }
@@ -369,23 +424,29 @@ mod tests {
     }
 
     #[test]
-    fn apply_fail_mode_worst_min_returns_pos_inf() {
+    fn apply_fail_mode_worst_min_returns_f64_max() {
         let o = obj(ParseSpec::Float, FailMode::Worst, Direction::Min);
         let so = out_with(None, Some(ScoreFailure::Exit(1)));
         let d = apply_fail_mode(&so, &o);
         match d {
-            ScoreDecision::Use(v) => assert!(v == f64::INFINITY, "got {v}"),
+            ScoreDecision::Use(v) => {
+                assert_eq!(v, f64::MAX, "got {v}");
+                assert!(v.is_finite(), "must be finite to survive JSON: {v}");
+            }
             _ => panic!("expected Use"),
         }
     }
 
     #[test]
-    fn apply_fail_mode_worst_max_returns_neg_inf() {
+    fn apply_fail_mode_worst_max_returns_f64_min() {
         let o = obj(ParseSpec::Float, FailMode::Worst, Direction::Max);
         let so = out_with(None, Some(ScoreFailure::Exit(1)));
         let d = apply_fail_mode(&so, &o);
         match d {
-            ScoreDecision::Use(v) => assert!(v == f64::NEG_INFINITY, "got {v}"),
+            ScoreDecision::Use(v) => {
+                assert_eq!(v, f64::MIN, "got {v}");
+                assert!(v.is_finite(), "must be finite to survive JSON: {v}");
+            }
             _ => panic!("expected Use"),
         }
     }

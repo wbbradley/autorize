@@ -198,7 +198,7 @@ parse = { kind = "jq", path = ".metrics.bpb" }
 | Value       | Behavior on scoring failure (non-zero exit, timeout, signal, parse error) |
 |-------------|---------------------------------------------------------------------------|
 | `"invalid"` | Record the iteration with `outcome = "invalid"`; no score, no best update. |
-| `"worst"`   | Treat as the worst possible score: `+inf` when `direction = "min"`, `-inf` when `direction = "max"`. Counts as a real (terrible) score. |
+| `"worst"`   | Treat as the worst possible score: `f64::MAX` when `direction = "min"`, `f64::MIN` when `direction = "max"`. These finite sentinels round-trip through JSON (unlike `+inf` / `-inf`, which serde serializes as `null`). Counts as a real (terrible) score. |
 | `"abort"`   | Stop the whole `autorize run` with an error.                              |
 
 ## 7. `boundaries.deny_paths` vs `boundaries.allow_paths`
