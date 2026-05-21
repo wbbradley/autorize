@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1] - 2026-05-20
+
+### Changed
+
+- Reworded the README opener — autorize is a CLI you point at a repo, not a binary you drop in.
+- Dropped the `aider` mention from the agent-integration examples (README and 0.1.0 changelog entry).
+
 ## [0.2.0] - 2026-05-20
 
 ### Added
