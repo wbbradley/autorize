@@ -400,3 +400,44 @@ canary.
 146 unit + 4 e2e = 150 passing total. `chk` clean. The related PLAN.md items
 (`iterations_completed` overcount on killed; `iter_in_progress` not cleared
 on abort) are intentionally out of scope and remain in the queue.
+
+## GitHub Release + CI workflows; macOS promoted to supported runtime (2026-05-21)
+
+Greenfielded `.github/workflows/`. Added `release.yml` triggered on
+`v[0-9]+.[0-9]+.[0-9]+*` tag push, with a `strategy.matrix` over
+`{x86_64-unknown-linux-gnu / ubuntu-latest, aarch64-apple-darwin /
+macos-latest}`. Uses `taiki-e/upload-rust-binary-action@v1` to build, package
+(`tar.gz`), sha256-sidecar, and upload to a GitHub Release in one step;
+archive template `$bin-$tag-$target` produces the asset names the PLAN
+table specified. `contents: write` permission on the job, `GITHUB_TOKEN`
+auth, `dtolnay/rust-toolchain@stable` for toolchain. On the Linux matrix
+job an extra step extracts the produced archive into a scratch dir and
+runs `./autorize --version` to self-test. No `cargo publish` step (manual
+in v1).
+
+Added `ci.yml` triggered on push to `main` and PRs, with a
+`{ubuntu-latest, macos-latest}` matrix. Steps: `cargo fmt --all -- --check`,
+`cargo clippy --all-targets -- -D warnings`, `cargo test --all`. This
+backs the macOS-runtime decision so darwin regressions can't land
+silently.
+
+Promoted macOS to a supported runtime in design docs:
+- PLAN.md design-decision table: `Linux-only v1` → `Linux + macOS (aarch64)
+  supported`.
+- PLAN.md "Deferred (NOT in v1)" list: dropped `macOS`.
+- README.md `## Status`: removed `macOS` from "Out of scope for v1".
+- README.md `## Install`: replaced `Linux only for v1.` with a supported-
+  platforms note and a download-and-extract recipe that resolves the
+  latest tag via curl-follow-redirect and pulls
+  `autorize-${TAG}-${TARGET}.tar.gz` from the release. Kept
+  `cargo install --path .` as the from-source path.
+
+No Rust source changes — the `nix` features in use (`signal`, `process`,
+`fs`; `Flock`, `killpg`, `setsid`, `setpgid`) are all supported on Darwin,
+so the build is expected to be portable as-is. The CI workflow will
+prove or disprove that on the first push.
+
+146 unit + 4 e2e tests still pass; `chk` clean. Both YAML files parse with
+`python3 -c "import yaml; yaml.safe_load(open(...))"`. Real verification
+(matrix run, four release assets produced) lands when the next tag is
+pushed.

@@ -33,11 +33,31 @@ The loop exits when the total deadline fires, `max_iterations` is hit, or
 
 ## Install
 
+Supported platforms: Linux (`x86_64-unknown-linux-gnu`) and macOS
+(`aarch64-apple-darwin`, Apple Silicon).
+
+**Prebuilt binary** (from the latest GitHub Release):
+
+```sh
+# Pick your target:
+TARGET=x86_64-unknown-linux-gnu       # or: aarch64-apple-darwin
+
+# Resolve the latest tag, then download + extract:
+TAG=$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+  https://github.com/wbbradley/autorize/releases/latest | sed 's#.*/tag/##')
+curl -fsSL "https://github.com/wbbradley/autorize/releases/download/${TAG}/autorize-${TAG}-${TARGET}.tar.gz" \
+  | tar -xz
+./autorize --version
+```
+
+Or browse <https://github.com/wbbradley/autorize/releases/latest> and grab the
+archive for your target by hand.
+
+**From source**:
+
 ```sh
 cargo install --path .
 ```
-
-Linux only for v1.
 
 ## Quickstart
 
@@ -155,9 +175,9 @@ autorize run pi
 
 ## Status
 
-v1 is feature-complete on Linux. Out of scope for v1: parallel iterations,
-Pareto scoring, web/TUI, macOS, token accounting, retry/backoff, remote
-storage, allow-path enforcement (allow_paths is prompt-only).
+v1 is feature-complete on Linux and macOS (Apple Silicon). Out of scope for v1:
+parallel iterations, Pareto scoring, web/TUI, token accounting, retry/backoff,
+remote storage, allow-path enforcement (allow_paths is prompt-only).
 
 ## License
 

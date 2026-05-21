@@ -20,7 +20,7 @@ until a deadline fires. Generalizes Karpathy's `autoresearch` pattern
 - End-to-end demo example under `examples/pi-digits/`.
 
 **Deferred (NOT in v1)**
-Parallel iterations · Pareto scoring · web/TUI · macOS · allow-path *enforcement* (allow_paths is
+Parallel iterations · Pareto scoring · web/TUI · allow-path *enforcement* (allow_paths is
 prompt-only in v1) · token accounting · retry/backoff · remote storage · hot reload · log pruning
 · README/docs site.
 
@@ -193,7 +193,7 @@ disagreement. Tolerate torn last line. Refuse if `base_commit` missing.
 | Dirty tree | Refuse; `--allow-dirty` overrides |
 | Noop policy | Record `"noop"`; abort after 5 consecutive (configurable) |
 | Log retention | Retain all in v1; pruning deferred |
-| Platform | Linux-only v1 |
+| Platform | Linux + macOS (aarch64) supported |
 
 ---
 
