@@ -272,6 +272,7 @@ killed iterations.
     program.md               # freeform agent instructions
     state.json               # atomic checkpoint of loop state
     iterations.jsonl         # durable append-only log, one JSON object per line
+    run.lock                 # advisory flock held by the active `autorize run`; contains its pid
     iter-0001/
       prompt.md              # full prompt the agent saw
       changes.diff           # captured diff vs autorize/<name>
@@ -330,6 +331,11 @@ Each line in `iterations.jsonl` is one `IterationRecord` JSON object:
 Before entering the loop, `autorize run`:
 
 - Verifies the experiment directory exists (created by `autorize init`).
+- Acquires an exclusive non-blocking advisory flock on
+  `.autorize/<name>/run.lock`. A second concurrent `autorize run` on the
+  same experiment is rejected immediately with the holder's pid for
+  diagnostics. The kernel releases the lock automatically on process exit,
+  so a crash leaves no stale lock to clean up.
 - Verifies the current directory is a git repository.
 - Verifies the working tree is clean (excluding the `.autorize/` directory,
   which is always allowed to be dirty). Use `--allow-dirty` to bypass.

@@ -254,6 +254,46 @@ README gets a one-line entry in the Subcommands table pointing at
 `autorize llms`. 6 new unit tests bring the suite to 137 unit + 4 e2e = 141
 passing. `chk` clean.
 
+## flock-based concurrency guard for `autorize run` (2026-05-20)
+
+Closed the v1 data-integrity hole where two concurrent `autorize run`s on the
+same experiment would race on `state.json`, append interleaved
+`iterations.jsonl` records with duplicate `iter` numbers, and both drive the
+`autorize/<name>` tracking branch forward.
+
+New `src/lock.rs` defines `ExperimentLock`, an RAII guard wrapping
+`nix::fcntl::Flock<File>` with `FlockArg::LockExclusiveNonblock`. `acquire`
+creates the file (and parent dir) if needed, takes the exclusive non-blocking
+flock, then truncates and writes the holder's pid for diagnostics. On
+failure it best-effort reads the existing pid and surfaces it through a new
+`Error::Locked { path, detail }` variant: `another autorize run holds the
+lock at .autorize/<name>/run.lock (held by pid 12345) [EWOULDBLOCK]`. The
+lock is released automatically on every return path (success, error, panic)
+via `Drop`. The kernel also releases it on process death, so a crash leaves
+no stale lock to clean up.
+
+`ExperimentPaths::lock_path()` returns `.autorize/<name>/run.lock`.
+`run_loop` (src/cli/run.rs) acquires the lock immediately after the
+experiment-dir-exists check and before reading config — so a doomed second
+run never even parses TOML, and config errors during the held run release
+the lock cleanly. The fd-based flock semantics mean two `acquire()` calls
+from the same process on the same path collide, which makes the behavior
+unit-testable without spawning a child.
+
+Required enabling the `fs` feature on the existing `nix` dependency
+(`cargo add nix --features=fs`) to expose `Flock`/`FlockArg`.
+
+Updated `src/llms.md`: added `run.lock` to the on-disk layout (section 10)
+and a pre-flight bullet (section 12) documenting that concurrent runs are
+rejected with the holder's pid.
+
+5 new tests: 3 in `src/lock.rs` (`acquire_creates_file_and_writes_pid`,
+`second_acquire_fails_while_held`, `lock_released_after_drop`) and 2 in
+`src/cli/run.rs::tests` (`refuses_concurrent_run` holds the lock manually
+then asserts `run_loop` errors with `"lock"` in the message;
+`lock_released_after_successful_run` asserts a clean run releases the lock
+so a re-acquire succeeds). 140 unit + 4 e2e tests passing. `chk` clean.
+
 ## `fail_mode = "worst"` JSON round-trip + non-finite score rejection (2026-05-20)
 
 Two coordinated fixes in `src/scoring.rs` that close one high-severity

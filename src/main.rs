@@ -4,6 +4,7 @@ mod config;
 mod error;
 mod experiment;
 mod iteration;
+mod lock;
 mod prompt;
 mod schedule;
 mod scoring;

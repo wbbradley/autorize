@@ -6,6 +6,7 @@ use crate::{
     error::{Error, Result},
     experiment::ExperimentPaths,
     iteration::{self, IterationInputs},
+    lock::ExperimentLock,
     schedule::{self, Deadline},
     storage::{self, CurrentStep, IterationRecord, Outcome, StateSnapshot},
     worktree::Git,
@@ -51,6 +52,8 @@ pub(crate) fn run_loop(
             paths.root()
         )));
     }
+
+    let _lock = ExperimentLock::acquire(&paths.lock_path())?;
 
     let cfg = paths.load_config()?;
     let program_md = paths.load_program()?;
@@ -533,6 +536,41 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         assert!(state_path.exists(), "state.json should exist");
         let git = Git::new(tmp.path().to_path_buf());
         assert!(git.branch_exists("autorize/test").unwrap());
+    }
+
+    #[test]
+    fn refuses_concurrent_run() {
+        let tmp = init_test_repo();
+        let root = write_experiment(
+            tmp.path(),
+            "test",
+            "true",
+            "bash score.sh",
+            Duration::from_secs(60),
+            1,
+        );
+        let lock_path = root.join("run.lock");
+        let _held = crate::lock::ExperimentLock::acquire(&lock_path).unwrap();
+
+        let err = run_loop("test".to_string(), false, tmp.path().to_path_buf(), false).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("lock"), "got: {msg}");
+    }
+
+    #[test]
+    fn lock_released_after_successful_run() {
+        let tmp = init_test_repo();
+        write_experiment(
+            tmp.path(),
+            "test",
+            "true",
+            "bash score.sh",
+            Duration::from_millis(50),
+            0,
+        );
+        run_loop("test".to_string(), false, tmp.path().to_path_buf(), false).unwrap();
+        let lock_path = tmp.path().join(".autorize/test/run.lock");
+        let _l = crate::lock::ExperimentLock::acquire(&lock_path).unwrap();
     }
 
     #[test]

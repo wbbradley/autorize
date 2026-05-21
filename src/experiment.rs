@@ -42,6 +42,10 @@ impl ExperimentPaths {
         self.root().join("state.json")
     }
 
+    pub fn lock_path(&self) -> PathBuf {
+        self.root().join("run.lock")
+    }
+
     pub fn iter_dir(&self, iter: u64) -> PathBuf {
         self.root().join(format!("iter-{iter:04}"))
     }
