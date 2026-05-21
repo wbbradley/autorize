@@ -441,3 +441,43 @@ prove or disprove that on the first push.
 `python3 -c "import yaml; yaml.safe_load(open(...))"`. Real verification
 (matrix run, four release assets produced) lands when the next tag is
 pushed.
+
+### Follow-on fixes (discovered during validation)
+
+The first tag push (`v0.2.2-rc1`) exposed three issues that PLAN.md had
+either misjudged or hadn't anticipated:
+
+1. **Release: action does not auto-create the GitHub Release.** PLAN.md
+   claimed "First matrix job auto-creates the Release" — wrong.
+   `taiki-e/upload-rust-binary-action@v1` polls for an existing release
+   and exits after ~10 retries with `release not found`. Added a
+   `create-release` job using `taiki-e/create-gh-release-action@v1` that
+   runs before the `upload-assets` matrix (`needs: create-release`). The
+   companion action auto-detects pre-release from tags like `-rc1`.
+
+2. **CI: nightly rustfmt required.** `chk` runs `cargo fmt -- --config
+   "group_imports=StdExternalCrate,imports_granularity=Crate,imports_layout
+   =HorizontalVertical"`, all of which are unstable rustfmt features.
+   Stable rustfmt silently ignores them, so CI's `cargo fmt --check`
+   reformatted every file. Fix: install both `dtolnay/rust-toolchain@nightly`
+   (for rustfmt) and `@stable` (for clippy + tests), and invoke
+   `cargo +nightly fmt --check` with the same config flags `chk` uses.
+
+3. **macOS test portability: `/var` vs `/private/var`.** `worktree::tests::
+   worktree_add_and_list_and_remove` failed on Darwin because `git worktree
+   add` canonicalizes the worktree path (resolving the
+   `/var → /private/var` symlink) before recording it, while `tempdir()`
+   hands back the uncanonicalized form. Comparing `e.path == wt` therefore
+   never matched. Fix: canonicalize both sides via `std::fs::canonicalize`
+   in the assertions. `worktree_list()` has no production caller, so this
+   is purely a test-portability fix; no production code changes.
+
+After these fixes, validation tag `v0.2.2-rc2` produced a clean run:
+- Release workflow: 2 matrix jobs green in 1m6s. Release marked
+  prerelease, four assets attached
+  (`autorize-v0.2.2-rc2-{x86_64-unknown-linux-gnu,aarch64-apple-darwin}
+  .{tar.gz,sha256}`). Linux job's self-test (`./autorize --version` after
+  extraction) passed.
+- CI workflow: both `{ubuntu-latest, macos-latest}` matrix jobs green;
+  all of fmt / clippy / `cargo test --all` pass on both runners
+  (146 unit + 4 e2e tests = 150 total).
