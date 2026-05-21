@@ -199,6 +199,4 @@ disagreement. Tolerate torn last line. Refuse if `base_commit` missing.
 
 ## Next Up
 
-(v1 complete.)
-
----
+(no upcoming work queued)

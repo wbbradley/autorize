@@ -68,6 +68,7 @@ autorize resume myexp
 | `autorize run <name>`    | Run the loop until deadline / cap / noop streak. |
 | `autorize status <name>` | One-shot summary from `state.json` + `iterations.jsonl`. |
 | `autorize resume <name>` | Recover after a crash; any in-progress iter is recorded as `killed` and the loop continues. |
+| `autorize llms`          | Print an exhaustive agent-targeted markdown reference (config schema, on-disk layout, `IterationRecord`, state machine). |
 
 `autorize run` accepts `--allow-dirty` if you need to start with uncommitted
 changes outside `.autorize/`.

@@ -1,4 +1,5 @@
 pub mod init;
+pub mod llms;
 pub mod resume;
 pub mod run;
 pub mod status;
@@ -14,6 +15,9 @@ pub struct Cli {
 pub enum Command {
     /// Scaffold a new experiment under .autorize/<name>/.
     Init(init::InitArgs),
+    /// Print an agent-targeted markdown reference covering every config
+    /// field, subcommand, and on-disk artifact.
+    Llms(llms::LlmsArgs),
     /// Run the experiment loop until deadline.
     Run(run::RunArgs),
     /// Show experiment status from state.json + iterations.jsonl.
@@ -25,6 +29,7 @@ pub enum Command {
 pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         Command::Init(a) => init::run(a),
+        Command::Llms(a) => llms::run(a),
         Command::Run(a) => run::run(a),
         Command::Status(a) => status::run(a),
         Command::Resume(a) => resume::run(a),

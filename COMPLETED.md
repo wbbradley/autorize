@@ -222,3 +222,34 @@ still carries it for tests).
 
 4 new integration tests bring the suite to 125 unit + 4 e2e = 129 passing.
 `chk` clean.
+
+## `autorize llms` — agent-targeted docs subcommand (2026-05-20)
+
+Added a 5th subcommand, `autorize llms`, that prints an exhaustive
+plainly-formatted markdown reference aimed at LLM/agent consumers. The doc
+covers what autorize is, the worktree-per-iter mechanism, the end-to-end
+workflow, the iteration state machine with all 16 `CurrentStep` variants and
+all 6 `Outcome` values, every `config.toml` field with type + default + validation
+rule, all three `objective.parse` variants and all three `fail_mode` variants,
+the `schedule` grammar (humantime / RFC3339 / natural language), `agent.command`
+substitutions + `agent.env` `$VAR`/`${VAR}` expansion + `agent.stdin` modes, the
+on-disk layout, the full `IterationRecord` and `StateSnapshot` schemas, the
+`autorize run` pre-flight checks, and an inline `examples/pi-digits/`
+walkthrough (config + program.md + sample `iterations.jsonl` + sample status
+output + a simulated crash + resume).
+
+`src/cli/llms.rs` follows the `init.rs` shape with a single `LLMS_MD: &str =
+include_str!("../llms.md")` body and a no-op `LlmsArgs`. Wired into `src/cli.rs`
+as `Command::Llms`. `src/llms.md` is the embedded body.
+
+Drift guard: a unit test renders the default config template, parses the TOML,
+recursively collects every key (including sub-table keys like `ANTHROPIC_API_KEY`
+inside `[agent.env]`), and asserts each appears as a literal substring in the
+embedded markdown. A new field in `Config` that's also added to the template
+will fail this test until `llms.md` documents it. Four smaller smoke tests
+cover non-emptiness + leading heading, all 6 outcome variants, all parse kinds
+and fail-modes, all 5 subcommand names, and all 16 `CurrentStep` variants.
+
+README gets a one-line entry in the Subcommands table pointing at
+`autorize llms`. 6 new unit tests bring the suite to 137 unit + 4 e2e = 141
+passing. `chk` clean.
