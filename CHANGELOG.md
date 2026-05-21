@@ -31,7 +31,7 @@
 - Hard wall-clock budgets enforced per-iteration and per-experiment: process-group `SIGTERM` then `SIGKILL` on timeout, reaching grandchildren a plain kill would orphan.
 - Deadline expressions accept humantime durations (`4h`), RFC3339 timestamps, or natural language (`tomorrow 9am`, `14:30`).
 - Boundary enforcement: `deny_paths` globs reject any iteration whose diff (including new files) touches forbidden paths.
-- Agent integration is CLI-agnostic — works with Claude Code, `aider`, shell scripts, or anything else; supports `{prompt_file}`/`{workdir}`/`{iter}` substitution, env var injection with `$VAR` expansion, and prompt-via-file or prompt-via-stdin delivery.
+- Agent integration is CLI-agnostic — works with Claude Code, shell scripts, or anything else; supports `{prompt_file}`/`{workdir}`/`{iter}` substitution, env var injection with `$VAR` expansion, and prompt-via-file or prompt-via-stdin delivery.
 - Durable on-disk record: atomic `state.json` checkpoints at every step, append-only `iterations.jsonl` log, per-iter prompt/diff/stdout/stderr artifacts; torn-write-tail tolerant on resume.
 - Loop termination on total-budget deadline, `max_iterations` cap, or `max_consecutive_noops` streak.
 - Pre-flight safety: refuses dirty trees (with `--allow-dirty` escape hatch that still excludes `.autorize/`), validates base commit reachability, and refuses to start over an in-progress experiment without `resume`.

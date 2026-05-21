@@ -6,7 +6,7 @@ against the score — keeping improvements, discarding regressions — until a d
 fires.
 
 It generalizes the [`autoresearch`](https://github.com/karpathy/autoresearch) pattern
-into a small Rust binary you can drop into any repo.
+into a small Rust CLI you can point at any repo.
 
 ## How it works
 
@@ -15,7 +15,7 @@ For each iteration, `autorize`:
 1. Creates a fresh git worktree off the `autorize/<name>` tracking branch.
 2. Builds a prompt from your `program.md`, the boundary rules, the last 10
    iteration records, and the diff of the best iteration so far.
-3. Spawns your agent (any CLI — Claude Code, `aider`, a shell script, anything)
+3. Spawns your agent (any CLI — Claude Code, a shell script, anything)
    inside the worktree with a hard wall-clock budget. On timeout the whole
    process group gets `SIGTERM`, then `SIGKILL` after 5 s.
 4. Stages the agent's changes and rejects the iteration if its diff touches a
