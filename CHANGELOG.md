@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.2] - 2026-05-21
+
+### Added
+
+- Official macOS support (`aarch64-apple-darwin`, Apple Silicon) alongside Linux (`x86_64-unknown-linux-gnu`). Both targets are first-class and exercised in CI.
+- GitHub Release workflow publishes prebuilt `autorize` binaries for Linux and macOS on every `v*` tag, with SHA-256 checksums and a self-test that extracts and runs the Linux archive before the release is finalized. Pre-releases (e.g. `v0.2.2-rc1`) are auto-detected from the tag.
+- GitHub Actions CI workflow runs `cargo fmt --check` (nightly rustfmt, matching the project's unstable import-grouping config), `cargo clippy --all-targets -D warnings`, and `cargo test --all` on Linux and macOS for every push to `main` and every pull request.
+- README install section now documents both the prebuilt-binary path (with a copy-pasteable `curl | tar` snippet) and the `cargo install --path .` from-source path, and lists the supported target triples.
+
+### Fixed
+
+- `worktree_list` test no longer fails on macOS, where git canonicalizes recorded worktree paths through `/private/var/...` while the test created them under `/var/...`. The assertion now compares canonicalized paths on both sides.
+
+### Notes
+
+- No changes to the `autorize` binary's behavior, CLI surface, config schema, or on-disk formats (`state.json`, `iterations.jsonl`). This is a packaging and CI release.
+
 ## [0.2.1] - 2026-05-20
 
 ### Changed
