@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::{config::Config, error::Result};
+
 #[derive(Debug, Clone)]
 pub struct ExperimentPaths {
     project_root: PathBuf,
@@ -42,5 +44,14 @@ impl ExperimentPaths {
 
     pub fn iter_dir(&self, iter: u64) -> PathBuf {
         self.root().join(format!("iter-{iter:04}"))
+    }
+
+    pub fn load_config(&self) -> Result<Config> {
+        let text = std::fs::read_to_string(self.config_path())?;
+        Config::from_toml(&text)
+    }
+
+    pub fn load_program(&self) -> Result<String> {
+        Ok(std::fs::read_to_string(self.program_path())?)
     }
 }

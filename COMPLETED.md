@@ -136,3 +136,41 @@ untracked content, which would let a new `forbidden/x.txt` slip past.
 table + best diff fence + full snapshot), and 5 iteration (merged on improvement against a
 real git repo + awk-based `score.sh`, plus the noop/denied/discarded/invalid outcomes).
 Suite is now 111 passing total. `chk` clean.
+
+## Phase 5 — CLI `run` / `status` / `resume` + pre-flight (2026-05-20)
+
+Wired Phases 1–4 into a working binary. `src/cli/run.rs` implements `run` and a
+`pub(crate) run_loop` shared with resume. The loop does pre-flight (git repo
+check, `--allow-dirty`-gated dirty-tree check that excludes `.autorize/` so
+autorize's own state writes don't trip it, base_commit reachability,
+in-progress refusal), then drives `iteration::run_iteration` until deadline,
+`max_iterations`, or `max_consecutive_noops` fires. Fresh starts compute the
+deadline via `schedule::compute_deadline`, create the `autorize/<name>` branch
+at HEAD, and seed `state.json`; subsequent invocations read state and resume
+from it. Per-iter status line prints outcome + score + best; final summary
+prints experiment / iterations / best on exit.
+
+`src/cli/resume.rs` delegates to `run_loop(.., recover_iter=true)`. When state
+shows an in-progress iter, the new `record_killed` helper best-effort removes
+the leftover worktree, appends an `outcome:"killed"` record with notes
+`"resumed after crash"`, clears `iter_in_progress`, and bumps
+`iterations_completed` — then the loop continues at iter+1. Resume errors out
+cleanly when no state.json exists.
+
+`src/cli/status.rs` reads state + jsonl and prints a one-shot summary
+(experiment / branch / base_commit / iterations / noop streak / last outcome /
+best (iter + score) / elapsed / remaining via `humantime::format_duration`, +
+optional in-progress line). Errors with a hint when state.json is missing.
+
+Support work: added `Git::is_clean_excluding(&[&str])` to `worktree.rs` (parses
+porcelain-v1 output and ignores paths under given prefixes) plus 2 tests;
+`ExperimentPaths::{load_config,load_program}` helpers; dropped `#[allow(dead_code)]`
+on `storage::{read_state, read_iterations}` now that the run loop uses them.
+
+14 new tests bring the suite to 125 passing: 7 run tests (refuses dirty,
+allow-dirty flag, tolerates dirty `.autorize/`, refuses unreachable
+base_commit, refuses in-progress without resume, fresh-run creates branch +
+state, respects `max_iterations`), 2 resume tests (records killed +
+continues, errors on missing state), 3 status tests (no iterations, best
+formatted, missing state errors), 2 worktree clean-excluding tests. `chk`
+clean.

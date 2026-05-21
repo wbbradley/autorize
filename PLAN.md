@@ -199,23 +199,6 @@ disagreement. Tolerate torn last line. Refuse if `base_commit` missing.
 
 ## Next Up
 
-### Phase 5 — CLI run / status / resume + pre-flight
-
-Implement `src/cli/run.rs` (pre-flight checks, main loop until deadline), `src/cli/status.rs`
-(read state + jsonl, print summary), `src/cli/resume.rs` (continue after crash; abandoned iter
-cleanup).
-
-**Acceptance:**
-- `autorize run` refuses on a dirty repo (non-zero exit); `--allow-dirty` succeeds.
-- `autorize run` refuses if base_commit unreachable.
-- `autorize status` prints iteration count, best score, best iter, last outcome, elapsed,
-  remaining.
-- `autorize resume` after a mid-iteration kill: abandoned iter recorded as `"killed"`, run
-  continues at `iter+1`.
-- `--help` for every subcommand is non-trivial.
-
----
-
 ### Phase 6 — Examples + e2e tests + polish
 
 Build `examples/pi-digits/` (a `value.txt` with `"3.0"`, a `score.sh` printing `abs(pi - value)`,

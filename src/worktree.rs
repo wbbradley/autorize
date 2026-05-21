@@ -35,6 +35,24 @@ impl Git {
         Ok(out.trim().is_empty())
     }
 
+    /// True iff `git status --porcelain` is empty after filtering lines
+    /// whose path lies under any of the supplied prefixes.
+    pub fn is_clean_excluding(&self, ignored_prefixes: &[&str]) -> Result<bool> {
+        let out = run_git(&["status", "--porcelain"], &self.repo_root)?;
+        for raw in out.lines() {
+            // porcelain v1 format: "XY <path>" where the path starts at byte 3.
+            // For renames `R  old -> new`, the rest also starts at byte 3.
+            if raw.len() < 4 {
+                continue;
+            }
+            let path = &raw[3..];
+            if !ignored_prefixes.iter().any(|p| path.starts_with(p)) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     pub fn head_sha(&self) -> Result<String> {
         run_git_trim(&["rev-parse", "HEAD"], &self.repo_root)
     }
@@ -257,6 +275,25 @@ mod tests {
         std::fs::write(tmp.path().join("README.md"), "changed\n").unwrap();
         let g = Git::new(tmp.path().to_path_buf());
         assert!(!g.is_clean().unwrap());
+    }
+
+    #[test]
+    fn is_clean_excluding_ignores_autorize_dir() {
+        let tmp = init_repo();
+        std::fs::create_dir_all(tmp.path().join(".autorize/pi")).unwrap();
+        std::fs::write(tmp.path().join(".autorize/pi/state.json"), "{\"x\":1}\n").unwrap();
+        let g = Git::new(tmp.path().to_path_buf());
+        assert!(g.is_clean_excluding(&[".autorize/"]).unwrap());
+    }
+
+    #[test]
+    fn is_clean_excluding_flags_unrelated_untracked() {
+        let tmp = init_repo();
+        std::fs::create_dir_all(tmp.path().join(".autorize/pi")).unwrap();
+        std::fs::write(tmp.path().join(".autorize/pi/state.json"), "{}\n").unwrap();
+        std::fs::write(tmp.path().join("stray.txt"), "hello\n").unwrap();
+        let g = Git::new(tmp.path().to_path_buf());
+        assert!(!g.is_clean_excluding(&[".autorize/"]).unwrap());
     }
 
     #[test]

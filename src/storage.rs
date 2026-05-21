@@ -76,7 +76,6 @@ pub fn write_state(path: &Path, state: &StateSnapshot) -> Result<()> {
     write_atomic(path, bytes.as_bytes())
 }
 
-#[allow(dead_code)] // wired in by Phase 5 resume + status
 pub fn read_state(path: &Path) -> Result<Option<StateSnapshot>> {
     match fs::read(path) {
         Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
@@ -95,7 +94,6 @@ pub fn append_iteration(path: &Path, rec: &IterationRecord) -> Result<()> {
     Ok(())
 }
 
-#[allow(dead_code)] // wired in by Phase 5
 pub fn read_iterations(path: &Path) -> Result<Vec<IterationRecord>> {
     let bytes = match fs::read(path) {
         Ok(b) => b,
