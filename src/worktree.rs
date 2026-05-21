@@ -344,17 +344,27 @@ mod tests {
         let wt_dir = tempdir().unwrap();
         let wt = wt_dir.path().join("wt");
         g.worktree_add(&wt, "autorize/test").unwrap();
+        // git canonicalizes worktree paths (resolves symlinks) before
+        // recording them, so on macOS the on-disk path /var/folders/...
+        // comes back as /private/var/folders/.... Compare canonical forms.
+        let wt_canon = std::fs::canonicalize(&wt).unwrap();
         let list = g.worktree_list().unwrap();
         assert!(
-            list.iter()
-                .any(|e| e.path == wt && e.branch.as_deref() == Some("autorize/test")),
-            "wt missing from list: {list:?}"
+            list.iter().any(|e| {
+                std::fs::canonicalize(&e.path)
+                    .map(|p| p == wt_canon)
+                    .unwrap_or(false)
+                    && e.branch.as_deref() == Some("autorize/test")
+            }),
+            "wt missing from list (wt_canon={wt_canon:?}): {list:?}"
         );
         g.worktree_remove(&wt).unwrap();
         let list = g.worktree_list().unwrap();
         assert!(
-            !list.iter().any(|e| e.path == wt),
-            "wt still in list: {list:?}"
+            !list.iter().any(|e| std::fs::canonicalize(&e.path)
+                .map(|p| p == wt_canon)
+                .unwrap_or(false)),
+            "wt still in list (wt_canon={wt_canon:?}): {list:?}"
         );
     }
 
