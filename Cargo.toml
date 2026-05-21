@@ -2,6 +2,11 @@
 name = "autorize"
 version = "0.1.0"
 edition = "2024"
+authors = ["Will Bradley <williambbradley@gmail.com>"]
+description = "Iterative-improvement harness: runs an agent CLI in sandboxed git worktrees against a scoring command, keeping improvements until a deadline fires."
+repository = "https://github.com/wbbradley/autorize"
+license = "AGPL-3.0-or-later"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1.0.102"
