@@ -9,7 +9,19 @@ permissions:
   contents: write
 
 jobs:
+  # taiki-e/upload-rust-binary-action only uploads to an existing release; it
+  # does not create one. This job creates it first (auto-detecting pre-release
+  # from tags like v0.2.2-rc1).
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/create-gh-release-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   upload-assets:
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:

@@ -15,12 +15,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Nightly rustfmt is required: the project's fmt config (matching
+      # ~/.local/bin/chk) uses `imports_granularity=Crate`, `group_imports=
+      # StdExternalCrate`, and `imports_layout=HorizontalVertical`, which are
+      # unstable rustfmt features.
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
 
-      - name: cargo fmt --check
-        run: cargo fmt --all -- --check
+      - name: cargo +nightly fmt --check
+        run: |
+          cargo +nightly fmt --all -- --check \
+            --config "group_imports=StdExternalCrate,imports_granularity=Crate,imports_layout=HorizontalVertical"
 
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
