@@ -28,14 +28,20 @@ pub fn build_prompt(ctx: &PromptContext) -> String {
     s.push_str(ctx.program_md.trim_end());
     s.push_str("\n\n---\n\n");
 
-    s.push_str("## Boundaries\n\n");
-    s.push_str("You should focus your edits on these paths (PROMPT-ONLY, not enforced):\n");
-    push_path_list(&mut s, &ctx.boundaries.allow_paths);
-    s.push('\n');
-    s.push_str(
-        "You MUST NOT modify these paths (ENFORCED \u{2014} touching them discards the iteration):\n",
-    );
-    push_path_list(&mut s, &ctx.boundaries.deny_paths);
+    if !ctx.boundaries.allow_paths.is_empty() || !ctx.boundaries.deny_paths.is_empty() {
+        s.push_str("## Boundaries\n\n");
+        if !ctx.boundaries.allow_paths.is_empty() {
+            s.push_str("You should focus your edits on these paths (PROMPT-ONLY, not enforced):\n");
+            push_path_list(&mut s, &ctx.boundaries.allow_paths);
+            s.push('\n');
+        }
+        if !ctx.boundaries.deny_paths.is_empty() {
+            s.push_str(
+            "You MUST NOT modify these paths (ENFORCED \u{2014} touching them discards the iteration):\n",
+        );
+            push_path_list(&mut s, &ctx.boundaries.deny_paths);
+        }
+    }
 
     s.push_str("\n## Recent iterations\n\n");
     if ctx.recent.is_empty() {

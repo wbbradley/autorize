@@ -165,6 +165,11 @@ impl Git {
             .collect())
     }
 
+    /// Subject line of the most recent commit on `refname`.
+    pub fn log_subject(&self, refname: &str) -> Result<String> {
+        run_git_trim(&["log", "-1", "--format=%s", refname], &self.repo_root)
+    }
+
     pub fn commit_all_in(&self, wt: &Path, msg: &str) -> Result<String> {
         run_git(&["add", "-A"], wt)?;
         run_git(

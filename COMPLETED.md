@@ -341,3 +341,62 @@ at parse time, so any number it accepts is already finite; the
 `finite_or_parse_err` check stays for defense-in-depth.
 
 6 new tests (135 unit + 4 e2e = 139 passing total). `chk` clean.
+
+## Resume-time reconciliation for mid-merge crashes (2026-05-20)
+
+Fixed the data-integrity bug where a crash between `commit_all_in` and
+`append_iteration` + `write_state` (src/iteration.rs:146/175/187) left the
+merge commit on `autorize/<name>` but no record in `iterations.jsonl`. Before
+this fix, `autorize resume` blindly recorded the iter as `killed` / `score:
+null` for all three crash variants — losing the score for case 1 (merge
+landed, no record), writing a duplicate record for case 2 (record landed,
+state still mid-flight), and behaving correctly only for case 3 (no commit,
+no record).
+
+Replaced the single `record_killed` call on the resume path
+(src/cli/run.rs:119) with a new `reconcile_in_progress` dispatcher that
+inspects `iterations.jsonl` and the tracking-branch tip before falling back
+to `killed`:
+
+- **Case A — duplicate-record reconciliation:** if a record already exists
+  for `state.iter_in_progress`, replay it into `state` (update
+  `iterations_completed`, `consecutive_noops`, and best if it was `Merged`);
+  no new record written.
+- **Case B — branch-tip reconciliation:** else, read the subject of
+  `state.branch` HEAD. If it matches the production-format
+  `^autorize iter <N>: score <S>$` with `N == iter_in_progress`, synthesize
+  a `Merged` `IterationRecord` with the parsed score and a
+  `"reconciled from branch tip after crash"` note, append it, and update
+  `state.best_*` via direction-aware improvement check.
+- **Case C — killed (unchanged behavior):** record `killed` exactly as
+  before.
+
+The branch-tip parse uses a regex anchored on the iter number so older
+merge commits sitting on the branch can't be mistaken for the in-progress
+iter. Score round-trip exploits Rust's default `f64::Display` (Ryū) which is
+parseable through `f64::from_str` and survives the finite worst-mode
+sentinels (`f64::MAX`, `f64::MIN`) — no schema change to `state.json`, no
+re-running the (potentially expensive) objective command. The worktree
+removal moved up into the dispatcher so all three cases share it
+idempotently.
+
+Added `Git::log_subject(refname)` in `src/worktree.rs` (one-liner: `git log
+-1 --format=%s <refname>`). The existing `record_killed` shrank to take an
+explicit `iter` argument (the dispatcher already validated it).
+
+7 new tests: 4 in `src/cli/run.rs::tests` covering `parse_merge_subject`
+directly (matches with expected iter; rejects mismatched iter including
+substring shadowing like `iter 77` vs `iter 7`; rejects unrelated subjects
+and unparseable scores; round-trips `f64::MAX` and `f64::MIN`); 2 in
+`src/cli/resume.rs::tests` covering the new dispatcher
+(`resume_reconciles_merged_from_branch_tip` pre-creates a real commit on
+`autorize/test` with the production-format subject for iter 3 and verifies
+the reconciled record + `state.best_*` update;
+`resume_skips_duplicate_record` pre-writes a `Merged` record for iter 5 and
+verifies no duplicate is appended). The existing
+`resume_records_killed_for_in_progress` continues to pass as the Case C
+canary.
+
+146 unit + 4 e2e = 150 passing total. `chk` clean. The related PLAN.md items
+(`iterations_completed` overcount on killed; `iter_in_progress` not cleared
+on abort) are intentionally out of scope and remain in the queue.
