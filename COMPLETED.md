@@ -174,3 +174,51 @@ state, respects `max_iterations`), 2 resume tests (records killed +
 continues, errors on missing state), 3 status tests (no iterations, best
 formatted, missing state errors), 2 worktree clean-excluding tests. `chk`
 clean.
+
+## Phase 6 — Examples + e2e tests + polish (2026-05-20)
+
+Shipped the runnable end-to-end demo and a binary-level integration suite that
+proves every v1 acceptance criterion. v1 is now complete.
+
+`examples/pi-digits/` contains the fixture (`value.txt` seeded at `3.0`,
+`score.sh` printing `|π − value|` via `awk`, a `mock-agent.sh` that nudges
+30% toward π each iter and deliberately regresses on `iter % 4 == 0` to
+produce >=1 `discarded` outcome, a `bad-agent.sh` that writes
+`.autorize/pi/state.json` for the deny-path test, plus `.autorize/pi/config.toml`
+and `program.md`). The dir has no `*.rs` files so Cargo's `examples/`
+auto-discovery ignores it.
+
+`tests/e2e_pi.rs` drives the compiled `autorize` binary
+(via `env!("CARGO_BIN_EXE_autorize")`) against the fixture copied into a
+per-test `tempdir`:
+
+- `loop_converges_with_merges_and_discards` — runs 6 iters, asserts >=3
+  records, >=1 `merged` + >=1 `discarded`, strict iter 1..=N sequence,
+  `best_score < 0.1`, and the `autorize/pi` branch tip's `value.txt` is
+  closer to π than 3.0 (final value ~3.118, score ~0.024).
+- `dirty_tree_refused_then_allow_dirty_succeeds` — `stray.txt` outside
+  `.autorize/` causes `autorize run pi` to exit non-zero with `"uncommitted"`
+  in stderr; `--allow-dirty` succeeds and produces records.
+- `deny_path_violation_yields_denied_outcome` — patches config to point at
+  `bad-agent.sh` and `max_iterations = 1`; asserts the only record is
+  `outcome:"denied"` and `git rev-parse autorize/pi` still equals
+  `state.json`'s `base_commit` (tracking branch did not advance).
+- `resume_records_killed_then_continues` — hand-writes a `state.json` with
+  `iter_in_progress=1, current_step="InvokeAgent"`, pre-creates the
+  `autorize/pi` branch at HEAD, runs `autorize resume pi`; asserts iter 1 is
+  recorded as `outcome:"killed", notes:"resumed after crash"`, followed by
+  iters 2 and 3 as `merged`.
+
+Adjusted the example's `agent.stdin = "prompt"` (config validation requires
+`{prompt_file}` in the command when stdin is `"none"`); the mock agent
+ignores stdin.
+
+Polish: removed stale `#[allow(dead_code)]` attrs on
+`iteration::{IterationInputs, run_iteration}`, `agent::{AgentSpec,
+AgentOutput, run_agent}`, and `storage::{write_state, append_iteration}` —
+all reachable from the run loop now. Dropped the genuinely-unused
+`AgentOutput::signal` field (it was set but never read; `subproc::CommandOutput`
+still carries it for tests).
+
+4 new integration tests bring the suite to 125 unit + 4 e2e = 129 passing.
+`chk` clean.

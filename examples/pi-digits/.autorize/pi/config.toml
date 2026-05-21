@@ -1,0 +1,38 @@
+[experiment]
+name = "pi"
+description = "Demo: nudge value.txt toward π."
+
+[objective]
+command = "bash score.sh"
+direction = "min"
+parse = { kind = "float" }
+timeout = "30s"
+fail_mode = "invalid"
+
+[boundaries]
+allow_paths = ["value.txt"]
+deny_paths = [".autorize/**", "*.lock"]
+
+[setup]
+command = ""
+timeout = "1m"
+
+[teardown]
+command = ""
+timeout = "1m"
+
+[iteration]
+budget = "30s"
+max_iterations = 6
+keep_worktrees = false
+max_consecutive_noops = 5
+
+[schedule]
+total_budget = "5m"
+
+[agent]
+command = "bash mock-agent.sh {iter}"
+workdir_var = "AUTORIZE_WORKDIR"
+stdin = "prompt"
+
+[agent.env]

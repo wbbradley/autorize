@@ -6,7 +6,6 @@ use crate::{
     subproc::{self, CommandOutput},
 };
 
-#[allow(dead_code)] // Phase 4 wires this into the iteration state machine
 pub struct AgentSpec<'a> {
     pub command_template: &'a str,
     pub prompt_file: &'a Path,
@@ -19,16 +18,13 @@ pub struct AgentSpec<'a> {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)] // fields consumed by Phase 4
 pub struct AgentOutput {
     pub exit_code: Option<i32>,
-    pub signal: Option<i32>,
     pub killed_by_budget: bool,
     pub stdout: String,
     pub stderr: String,
 }
 
-#[allow(dead_code)] // Phase 4 wires this in
 pub fn run_agent(spec: &AgentSpec) -> Result<AgentOutput> {
     let command = substitute(
         spec.command_template,
@@ -46,7 +42,6 @@ pub fn run_agent(spec: &AgentSpec) -> Result<AgentOutput> {
         subproc::run_command_with_budget(&command, spec.workdir, spec.budget, &env, stdin_payload)?;
     Ok(AgentOutput {
         exit_code: out.exit_code,
-        signal: out.signal,
         killed_by_budget: out.timed_out,
         stdout: out.stdout,
         stderr: out.stderr,

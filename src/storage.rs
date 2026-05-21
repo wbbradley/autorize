@@ -70,7 +70,6 @@ pub struct StateSnapshot {
     pub consecutive_noops: u32,
 }
 
-#[allow(dead_code)] // wired in by Phase 4 iteration + Phase 5 run loop
 pub fn write_state(path: &Path, state: &StateSnapshot) -> Result<()> {
     let bytes = serde_json::to_string_pretty(state)?;
     write_atomic(path, bytes.as_bytes())
@@ -84,7 +83,6 @@ pub fn read_state(path: &Path) -> Result<Option<StateSnapshot>> {
     }
 }
 
-#[allow(dead_code)] // wired in by Phase 4 iteration
 pub fn append_iteration(path: &Path, rec: &IterationRecord) -> Result<()> {
     let line = serde_json::to_string(rec)?;
     let mut f = OpenOptions::new().create(true).append(true).open(path)?;

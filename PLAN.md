@@ -199,18 +199,6 @@ disagreement. Tolerate torn last line. Refuse if `base_commit` missing.
 
 ## Next Up
 
-### Phase 6 — Examples + e2e tests + polish
-
-Build `examples/pi-digits/` (a `value.txt` with `"3.0"`, a `score.sh` printing `abs(pi - value)`,
-a pre-populated `.autorize/pi/` config, and a mock "agent" script that inches `value.txt` toward
-π using iter env as a hint, occasionally regressing). Add `tests/e2e_pi.rs` running the full
-loop. Add deny-path enforcement test and dirty-tree refusal test.
-
-**Acceptance:** all of the v1 acceptance criteria from the original spec, run headlessly:
-- ≥3 iterations, ≥1 merge, ≥1 discard, final value closer to π than start.
-- Mid-run kill + resume continues cleanly.
-- Mock agent editing `.autorize/state.json` -> iteration outcome `"denied"`, file unchanged on
-  tracking branch.
-- `autorize run` on dirty repo exits non-zero; `--allow-dirty` succeeds.
+(v1 complete.)
 
 ---

@@ -14,7 +14,6 @@ use crate::{
     worktree::{self, Git},
 };
 
-#[allow(dead_code)] // wired in by Phase 5 (the run loop)
 pub struct IterationInputs<'a> {
     pub cfg: &'a Config,
     pub paths: &'a ExperimentPaths,
@@ -30,7 +29,6 @@ pub struct IterationInputs<'a> {
 /// Run one full iteration end-to-end. Mutates `state` and persists it
 /// (atomic write) at each major step transition. Appends the resulting
 /// `IterationRecord` to `iterations.jsonl`. Returns the record.
-#[allow(dead_code)] // wired in by Phase 5
 pub fn run_iteration(
     inputs: &IterationInputs,
     state: &mut StateSnapshot,
