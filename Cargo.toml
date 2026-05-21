@@ -1,6 +1,6 @@
 [package]
 name = "autorize"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 authors = ["Will Bradley <williambbradley@gmail.com>"]
 description = "Iterative-improvement harness: runs an agent CLI in sandboxed git worktrees against a scoring command, keeping improvements until a deadline fires."
