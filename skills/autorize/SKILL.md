@@ -17,25 +17,21 @@ on-disk layout. This skill body intentionally does not restate it — if
 something in the schema is unclear, re-read the `autorize llms` output, not
 this file.
 
-If `autorize` is not on PATH (`command -v autorize` fails), tell the user
-how to install it by pointing at the **Install** section of this repo's
-`README.md` (the prebuilt-binary instructions and `cargo install --path .`
-are both documented there) and **stop**. Do not try to install `autorize`
-for the user.
+If `autorize` is not on PATH (`command -v autorize` fails), tell the user how to install it by
+pointing at the **Install** section of the https://github.com/wbbradley/autorize repo's `README.md`
+(the prebuilt-binary instructions and `cargo install --path .` are both documented there) and
+**stop**. Do not try to install `autorize` for the user.
 
 ## 2. Quick repo scan
 
 Once `autorize llms` is loaded, take a short look at the repo so your
 later proposals are grounded in what's actually there — not boilerplate.
-Aim for one or two minutes of looking, not a deep audit:
-
-- `ls` the top level; `git ls-files | head -50` for the shape.
-- Read top-level `README.md`, plus whichever of
-  `Cargo.toml` / `package.json` / `pyproject.toml` / `go.mod` exists.
-- Note any obvious test or CI command (`cargo test`, `pytest`, `npm test`,
-  a `Makefile` target, `.github/workflows/*.yml`).
-
-The point of the scan is to *inform* the interview, not pre-decide it.
+A minute or two, not a deep audit: `ls` the top level + `git ls-files |
+head -50`; read `README.md` and whichever of `Cargo.toml` /
+`package.json` / `pyproject.toml` / `go.mod` exists; note any obvious
+test/CI command (`cargo test`, `pytest`, `npm test`, a `Makefile` target,
+`.github/workflows/*.yml`). The scan *informs* the interview, doesn't
+pre-decide it.
 
 ## 3. Interview the user
 
@@ -70,7 +66,7 @@ Gather these free-text (not via `AskUserQuestion`):
   answer before continuing.
 - One-paragraph **improvement goal** — seeds `program.md`.
 - **`objective.command`** shell string. If the user doesn't have one,
-  offer to draft a `score.sh` modeled on `examples/pi-digits/score.sh`.
+  offer to draft a small POSIX `score.sh` (see the pattern in §4).
 - For `parse.kind = "regex"`, the **`pattern`** (first capture group is
   the score). For `parse.kind = "jq"`, the **`path`** (e.g. `.metrics.loss`).
 - Either `schedule.total_budget` (humantime, e.g. `"4h"`) or
@@ -85,15 +81,26 @@ the scan. Examples:
 - Found `cargo test`? Propose `objective.command = "cargo test --quiet 2>&1
   | tail -1"` with a regex parse on the pass count.
 - Found `pytest`? Propose `pytest -q | tail -1` with an analogous parse.
-- Goal is improving a numeric metric in a tracked file? Mirror the
-  `examples/pi-digits/score.sh` pattern (small POSIX shell script that
-  reads the file and prints a single float).
+- Goal is improving a numeric metric in a tracked file? Draft a small
+  POSIX `score.sh` that reads the file and prints a single float on
+  stdout. Reference pattern (substitute the user's file/metric):
+
+  ```sh
+  #!/bin/sh
+  set -eu
+  v=$(cat value.txt)
+  awk -v x="$v" 'BEGIN { target=3.141592653589793; d=x-target;
+    if (d<0) d=-d; printf "%f\n", d }'
+  ```
 
 For `program.md`, draft content tailored to the stated goal — **not
-boilerplate**. Follow the tips embedded in `src/templates/program.md.tmpl`:
-be specific about what counts as an improvement, call out files to focus
-on / leave alone, mention that `boundaries.deny_paths` is enforced (a diff
-touching them discards the iteration), keep it short and dense.
+boilerplate**. Guidelines: be specific about what counts as an
+improvement (the objective command defines the score; this file is where
+you tell the agent *why* that score exists and what kinds of changes tend
+to move it). Call out files / directories to focus on or leave alone —
+and note that `boundaries.deny_paths` is enforced (a diff touching any
+deny pattern discards the iteration). Keep it short and dense; edit as
+you learn what the agent keeps getting wrong.
 
 When you offer a default, say whether it's your recommendation or a hard
 requirement of the schema.
@@ -136,7 +143,8 @@ The skill **does not** start the loop. End the conversation here.
 
 **References used by this skill:**
 
-- Schema & semantics — `autorize llms` (canonical) or `src/llms.md`.
-- Templates being overwritten — `src/templates/config.toml.tmpl`,
-  `src/templates/program.md.tmpl`.
-- Worked example to mirror for `score.sh` — `examples/pi-digits/score.sh`.
+- Schema & semantics — `autorize llms` (the only source of truth; the
+  agent does not need to clone the autorize repo).
+- Upstream repo (for the user, if they want install instructions, the
+  worked `examples/pi-digits/` end-to-end demo, or the on-disk templates):
+  <https://github.com/wbbradley/autorize>.
