@@ -36,6 +36,12 @@ The loop exits when the total deadline fires, `max_iterations` is hit, or
 Supported platforms: Linux (`x86_64-unknown-linux-gnu`) and macOS
 (`aarch64-apple-darwin`, Apple Silicon).
 
+**From crates.io**:
+
+```sh
+cargo install autorize
+```
+
 **Prebuilt binary** (from the latest GitHub Release):
 
 ```sh
