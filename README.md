@@ -80,6 +80,31 @@ autorize status myexp
 autorize resume myexp
 ```
 
+## Use with Claude Code
+
+This repo ships a Claude Code skill at [`skills/autorize/`](skills/autorize/) that
+walks you through scaffolding an experiment — it asks about your objective, scoring
+command, agent CLI, and schedule, then drafts `.autorize/<name>/config.toml`,
+`program.md`, and any helper scoring script for your review before writing.
+
+Install once (user-global, applies to every repo you open):
+
+```sh
+mkdir -p ~/.claude/skills
+cp -r skills/autorize ~/.claude/skills/
+```
+
+Or per-project (only this repo):
+
+```sh
+mkdir -p .claude/skills
+cp -r skills/autorize .claude/skills/
+```
+
+Then, from a Claude Code session in any repo with `autorize` on PATH, invoke
+`/autorize`. The skill prints `autorize llms` for context, interviews you,
+and stops at "ready to `autorize run <name>`" — it never starts the loop.
+
 ## Subcommands
 
 | Command | What it does |

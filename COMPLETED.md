@@ -481,3 +481,28 @@ After these fixes, validation tag `v0.2.2-rc2` produced a clean run:
 - CI workflow: both `{ubuntu-latest, macos-latest}` matrix jobs green;
   all of fmt / clippy / `cargo test --all` pass on both runners
   (146 unit + 4 e2e tests = 150 total).
+
+## `/autorize` Claude skill (2026-05-21)
+
+Shipped `skills/autorize/SKILL.md` — a Claude Code skill that walks a user
+from a fresh repo to a runnable `.autorize/<name>/` directory. The skill
+loads `autorize llms` as the canonical schema reference (so the skill body
+never restates the config schema and can't drift from the CLI), does a
+short repo scan, runs three `AskUserQuestion` batches covering every
+enum/bounded choice (objective shape, schedule + iteration, agent +
+boundaries), gathers free-text answers conversationally (experiment name
+validated against `[A-Za-z0-9_-]+`, improvement goal for `program.md`,
+scoring command), proposes defaults grounded in what it saw in the scan
+(`cargo test`, `pytest`, the pi-digits `score.sh` pattern), drafts
+`config.toml` / `program.md` / any helper script in chat, and only writes
+after explicit acceptance via `autorize init <name>` + `Write`. Validates
+via `autorize status <name>` and stops — never invokes `autorize run`.
+
+README gained a new "Use with Claude Code" section between Quickstart and
+Subcommands with copy-paste install instructions for both user-global
+(`~/.claude/skills/`) and per-project (`.claude/skills/`) locations.
+
+Body is 142 lines (cap was 150). All 146 unit + 4 e2e tests still pass;
+no Rust changes. Known follow-up: if the three-batch `AskUserQuestion`
+interview feels stilted in real use, a v2 iteration can collapse some
+choices to sensible defaults with override-on-request.
