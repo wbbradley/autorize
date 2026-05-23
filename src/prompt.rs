@@ -86,6 +86,12 @@ pub fn build_prompt(ctx: &PromptContext) -> String {
         direction_explanation(ctx.direction),
     );
 
+    s.push_str(
+        "\nJust edit files in the working tree \u{2014} do NOT run `git add`, `git commit`, \
+         or otherwise create commits yourself. autorize captures your uncommitted changes \
+         and commits them on your behalf.\n",
+    );
+
     s
 }
 
@@ -364,6 +370,8 @@ diff --git a/value.txt b/value.txt
 
 You are working on iteration 8. Hard wall-clock budget: 300s.
 The objective direction is `min` \u{2014} lower scores are better.
+
+Just edit files in the working tree \u{2014} do NOT run `git add`, `git commit`, or otherwise create commits yourself. autorize captures your uncommitted changes and commits them on your behalf.
 ";
         assert_eq!(got, expected, "got:\n{got}");
     }

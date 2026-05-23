@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.3] - 2026-05-23
+
+### Added
+
+- `/autorize` Claude Code skill (`skills/autorize/`) that interviews you about your objective, scoring command, agent CLI, schedule, and boundaries, then drafts `.autorize/<name>/{config.toml,program.md}` plus any helper scoring script for your review before writing — and stops at "ready to run", never starting the loop itself.
+- README "Use with Claude Code" section with copy-paste install steps for the skill, and crates.io install instructions (`cargo install autorize`).
+
+### Changed
+
+- The per-iteration prompt now explicitly tells the agent to only edit files in the working tree and not to run `git add` / `git commit` itself, clarifying that autorize captures the uncommitted changes and commits them on the agent's behalf.
+
 ## [0.2.2] - 2026-05-21
 
 ### Added
