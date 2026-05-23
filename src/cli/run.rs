@@ -745,4 +745,34 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         let recs = storage::read_iterations(&log).unwrap();
         assert_eq!(recs.len(), 2, "expected exactly 2 records, got {recs:?}");
     }
+
+    #[test]
+    fn keep_worktrees_does_not_block_second_iteration() {
+        // Regression: with `keep_worktrees = true`, iter 1's worktree used to
+        // keep the tracking branch checked out, so `git worktree add` for iter
+        // 2 failed ("branch already used by worktree"). Detached worktrees fix
+        // it. Both iterations must run.
+        let tmp = init_test_repo();
+        let root = write_experiment(
+            tmp.path(),
+            "test",
+            "echo 3.14 > value.txt",
+            "bash score.sh",
+            Duration::from_secs(60),
+            2,
+        );
+        let cfg_path = root.join("config.toml");
+        let mut cfg: Config = toml::from_str(&fs::read_to_string(&cfg_path).unwrap()).unwrap();
+        cfg.iteration.keep_worktrees = true;
+        fs::write(&cfg_path, toml::to_string(&cfg).unwrap()).unwrap();
+
+        run_loop("test".to_string(), false, tmp.path().to_path_buf(), false).unwrap();
+
+        let recs = storage::read_iterations(&root.join("iterations.jsonl")).unwrap();
+        assert_eq!(recs.len(), 2, "both iterations should run, got {recs:?}");
+        assert_eq!(recs[0].outcome, Outcome::Merged);
+        // Both worktrees are kept on disk (keep_worktrees = true).
+        assert!(root.join("iter-0001").join("wt").is_dir());
+        assert!(root.join("iter-0002").join("wt").is_dir());
+    }
 }

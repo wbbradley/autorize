@@ -141,9 +141,13 @@ pub fn run_iteration(
                 };
                 if improved {
                     checkpoint(state, inputs, CurrentStep::Merge)?;
-                    inputs
+                    // The worktree is on a detached HEAD, so committing only
+                    // creates a commit object — we advance the tracking branch
+                    // ref to it explicitly so the next iteration starts here.
+                    let sha = inputs
                         .git
                         .commit_all_in(&wt, &format!("autorize iter {}: score {s}", inputs.iter))?;
+                    inputs.git.update_branch_ref(inputs.branch, &sha)?;
                     outcome = Outcome::Merged;
                     new_best_score = Some(s);
                     new_best_iter = Some(inputs.iter);

@@ -224,8 +224,12 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         git.worktree_add(&wt, "autorize/test").unwrap();
         fs::write(wt.join("value.txt"), "3.1\n").unwrap();
         let score = 0.123456_f64;
-        git.commit_all_in(&wt, &format!("autorize iter 3: score {score}"))
+        // Detached worktree: commit, then advance the branch tip explicitly so
+        // reconciliation can read the production-format subject off it.
+        let sha = git
+            .commit_all_in(&wt, &format!("autorize iter 3: score {score}"))
             .unwrap();
+        git.update_branch_ref("autorize/test", &sha).unwrap();
         git.worktree_remove(&wt).unwrap();
 
         let now = Utc::now();

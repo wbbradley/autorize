@@ -80,9 +80,31 @@ impl Git {
         Ok(())
     }
 
+    /// Add a worktree at `wt` with a **detached** HEAD positioned at the tip
+    /// of `branch`. Detaching (rather than checking `branch` out) is what lets
+    /// multiple iterations — including kept worktrees (`keep_worktrees = true`)
+    /// — share a single tracking branch: git refuses to check the same branch
+    /// out in two worktrees, but it places no such restriction on detached
+    /// HEADs. The tracking branch is advanced explicitly via
+    /// [`update_branch_ref`](Self::update_branch_ref) when an iteration merges.
     pub fn worktree_add(&self, wt: &Path, branch: &str) -> Result<()> {
         let wt_str = path_str(wt)?;
-        run_git(&["worktree", "add", wt_str, branch], &self.repo_root)?;
+        run_git(
+            &["worktree", "add", "--detach", wt_str, branch],
+            &self.repo_root,
+        )?;
+        Ok(())
+    }
+
+    /// Force `branch` to point at `sha`. Uses plumbing `update-ref` rather
+    /// than `git branch -f` so it succeeds regardless of whether the branch is
+    /// checked out in some worktree. autorize worktrees are always detached so
+    /// this is normally moot, but it also lets an experiment left in a bad
+    /// state by an older binary (branch checked out in a kept worktree)
+    /// recover without manual cleanup.
+    pub fn update_branch_ref(&self, branch: &str, sha: &str) -> Result<()> {
+        let refname = format!("refs/heads/{branch}");
+        run_git(&["update-ref", &refname, sha], &self.repo_root)?;
         Ok(())
     }
 
@@ -354,7 +376,9 @@ mod tests {
                 std::fs::canonicalize(&e.path)
                     .map(|p| p == wt_canon)
                     .unwrap_or(false)
-                    && e.branch.as_deref() == Some("autorize/test")
+                    // Added with --detach, so it reports no branch even though
+                    // its HEAD sits at the autorize/test tip.
+                    && e.branch.is_none()
             }),
             "wt missing from list (wt_canon={wt_canon:?}): {list:?}"
         );
@@ -382,10 +406,35 @@ mod tests {
         let new_head = g.commit_all_in(&wt, "iter 1").unwrap();
         assert_ne!(new_head, head);
 
+        // The worktree HEAD is detached, so the commit does not move the
+        // branch on its own; the branch only advances once we update the ref.
+        assert_eq!(g.resolve_ref("autorize/test").unwrap().unwrap(), head);
+        g.update_branch_ref("autorize/test", &new_head).unwrap();
         let branch_head = g.resolve_ref("autorize/test").unwrap().unwrap();
         assert_eq!(branch_head, new_head);
 
         g.worktree_remove(&wt).unwrap();
+    }
+
+    #[test]
+    fn two_worktrees_can_share_one_branch() {
+        // Regression: with detached HEADs, two live worktrees may sit on the
+        // same tracking branch. (`keep_worktrees = true` used to die here on
+        // the second iteration because git refuses a branch checked out twice.)
+        let tmp = init_repo();
+        let g = Git::new(tmp.path().to_path_buf());
+        let head = g.head_sha().unwrap();
+        g.create_branch_at("autorize/test", &head).unwrap();
+        let dir = tempdir().unwrap();
+        let wt1 = dir.path().join("wt1");
+        let wt2 = dir.path().join("wt2");
+        g.worktree_add(&wt1, "autorize/test").unwrap();
+        g.worktree_add(&wt2, "autorize/test").unwrap();
+        // Advancing the shared branch must work even while both are live.
+        std::fs::write(wt1.join("README.md"), "changed\n").unwrap();
+        let sha = g.commit_all_in(&wt1, "iter 1").unwrap();
+        g.update_branch_ref("autorize/test", &sha).unwrap();
+        assert_eq!(g.resolve_ref("autorize/test").unwrap().unwrap(), sha);
     }
 
     #[test]

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.4] - 2026-05-23
+
+### Fixed
+
+- Experiments with `keep_worktrees = true` no longer fail on the second iteration. Previously the kept worktree held the tracking branch checked out, so creating the next iteration's worktree failed with "branch already used by worktree". Iteration worktrees now use a detached HEAD, which lets multiple worktrees share one tracking branch.
+
+### Changed
+
+- Iteration worktrees are now created with a detached HEAD; the tracking branch (`autorize/<name>`) is advanced explicitly when an iteration's changes are merged. The branch still lands on the same commits with the same `autorize iter N: score S` messages, so resume/reconciliation and existing on-disk experiments are unaffected — no migration needed. As a bonus, an experiment left in the old broken state by a previous version recovers automatically.
+
 ## [0.2.3] - 2026-05-23
 
 ### Added
