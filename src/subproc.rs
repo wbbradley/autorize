@@ -1,18 +1,114 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     io::{Read, Write},
     os::unix::process::{CommandExt, ExitStatusExt},
     path::Path,
     process::{Command, Stdio},
+    sync::{Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
 use nix::{
-    sys::signal::{Signal, killpg},
+    sys::signal::{Signal, kill, killpg},
     unistd::Pid,
 };
 
 use crate::error::{Error, Result};
+
+/// Process-group ids of children currently spawned by
+/// [`run_command_with_budget`]. Each child is its own session/pgroup leader
+/// (see the `setsid` in the spawn path), so it is detached from the
+/// terminal's foreground group and a `Ctrl-C` never reaches it directly.
+/// [`install_signal_handler`] consults this set on a fatal signal so we can
+/// tear those groups down instead of orphaning them.
+fn child_pgids() -> &'static Mutex<HashSet<i32>> {
+    static PGIDS: OnceLock<Mutex<HashSet<i32>>> = OnceLock::new();
+    PGIDS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// RAII registration of a child pgid for the duration of a spawn. Dropping
+/// (normal return, `?`, or panic) deregisters it so the signal handler never
+/// signals a reaped group.
+struct PgidGuard(i32);
+
+impl PgidGuard {
+    fn register(pgid: i32) -> Self {
+        child_pgids()
+            .lock()
+            .expect("pgid registry poisoned")
+            .insert(pgid);
+        PgidGuard(pgid)
+    }
+}
+
+impl Drop for PgidGuard {
+    fn drop(&mut self) {
+        child_pgids()
+            .lock()
+            .expect("pgid registry poisoned")
+            .remove(&self.0);
+    }
+}
+
+/// Grace period between SIGTERM and SIGKILL when tearing down children on a
+/// fatal signal to autorize itself. Kept shorter than the budget-kill GRACE so
+/// a `Ctrl-C` stays responsive; we poll and exit as soon as the groups die.
+const SIGNAL_GRACE: Duration = Duration::from_secs(3);
+
+/// True while any process in the group `pgid` is still alive.
+fn pgroup_alive(pgid: i32) -> bool {
+    kill(Pid::from_raw(-pgid), None).is_ok()
+}
+
+/// Install a handler for SIGINT/SIGTERM/SIGHUP that kills every live child
+/// process group before exiting. Children are spawned in their own sessions
+/// (for budget kills), which also detaches them from the controlling
+/// terminal — so without this a `Ctrl-C` would kill autorize and orphan the
+/// running agent (e.g. `claude --print`). Call once, early, from `main`.
+pub fn install_signal_handler() {
+    use signal_hook::{
+        consts::{SIGHUP, SIGINT, SIGTERM},
+        iterator::Signals,
+    };
+
+    let mut signals = match Signals::new([SIGINT, SIGTERM, SIGHUP]) {
+        Ok(s) => s,
+        Err(e) => {
+            // Non-fatal: the loop still runs, we just lose tidy teardown.
+            eprintln!("autorize: failed to install signal handler: {e}");
+            return;
+        }
+    };
+    std::thread::spawn(move || {
+        if let Some(sig) = signals.forever().next() {
+            terminate_children_and_exit(sig);
+        }
+    });
+}
+
+/// Send SIGTERM to every registered child group, wait briefly for them to
+/// exit, SIGKILL any survivors, then exit with the conventional
+/// `128 + signal` status. Runs on the signal-handling thread (not in an
+/// async-signal context), so locking and sleeping here are safe.
+fn terminate_children_and_exit(sig: i32) -> ! {
+    let pgids: Vec<i32> = child_pgids()
+        .lock()
+        .map(|s| s.iter().copied().collect())
+        .unwrap_or_default();
+    for &pg in &pgids {
+        let _ = killpg(Pid::from_raw(pg), Signal::SIGTERM);
+    }
+    let deadline = Instant::now() + SIGNAL_GRACE;
+    while Instant::now() < deadline && pgids.iter().any(|&pg| pgroup_alive(pg)) {
+        std::thread::sleep(GRACE_POLL);
+    }
+    for &pg in &pgids {
+        if pgroup_alive(pg) {
+            let _ = killpg(Pid::from_raw(pg), Signal::SIGKILL);
+        }
+    }
+    std::process::exit(128 + sig);
+}
 
 #[derive(Debug)]
 #[allow(dead_code)] // fields consumed by Phase 4 callers
@@ -66,6 +162,9 @@ pub fn run_command_with_budget(
     // After setsid, the child's pid is the new session leader and its pgid
     // equals its pid.
     let pgid = Pid::from_raw(child.id() as i32);
+    // Register the group so a fatal signal to autorize tears it down rather
+    // than orphaning it; the guard deregisters on every exit path below.
+    let _pgid_guard = PgidGuard::register(pgid.as_raw());
 
     let stdin_thread = stdin_payload.map(|payload| {
         let mut handle = child.stdin.take().expect("stdin was piped");
