@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.5] - 2026-05-23
+
+### Fixed
+
+- Tear down the agent's process group on a fatal signal (Ctrl-C / SIGTERM / SIGHUP) instead of orphaning it. Because agents run in their own session (so per-iteration budget kills can reach grandchildren), they were detached from the terminal's foreground group and survived when autorize was interrupted. autorize now SIGTERMs every live child group, waits a short grace period, SIGKILLs any survivors, and exits with the conventional `128 + signal` status.
+
 ## [0.2.4] - 2026-05-23
 
 ### Fixed
