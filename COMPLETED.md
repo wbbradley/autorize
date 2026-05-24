@@ -744,3 +744,53 @@ missing); one `iteration.rs` prompt-injection test; one `run.rs` integration
 test that seeds `guidance.jsonl` and asserts the loop reads it off disk into
 `iter-0001/prompt.md`. 211 unit + e2e + signal tests pass; `chk` clean.
 End-to-end CLI smoke test confirmed `autorize tell` is wired and its help renders.
+
+## Drop the best-diff prompt section + auto-backfill missing summaries (2026-05-24)
+
+Two prompt/iteration refinements, both additive/behavioral with no on-disk
+format change; landed under CHANGELOG `[Unreleased]`.
+
+**Part A — removed the "Best iteration so far" prompt section.** Each iteration's
+worktree is created off `autorize/<name>`, which only advances on a merge, so the
+next iteration's working tree *already contains* the best result on disk; the
+injected diff (`load_best_diff` → `iter-NNNN/changes.diff`) just re-rendered the
+last accepted increment as prompt text — redundant and prone to bloat. Deleted
+the `BestSnapshot` struct + `PromptContext.best` field and the rendering block in
+`src/prompt.rs`; dropped the `best_diff` plumbing from `IterationInputs` /
+`run_iteration` (`src/iteration.rs`) and the `load_best_diff` / `best_diff_text`
+bindings in `src/cli/run.rs`. The `best: (f64, u64)` score/iter pair **stays** —
+it still drives the improvement decision and the summary context. The
+recent-iterations table still surfaces the best score.
+
+**Part B — auto-backfill missing summaries at run startup.** The live
+`[summarize]` step only ever runs for the *current* iteration, so records written
+before `[summarize]` was enabled (or whose step failed) kept an empty `summary`
+forever. Extracted the run-the-summarizer-and-guard logic out of
+`summarize_iteration` into a shared `run_summarizer(cfg, workdir, iter,
+prompt_path) -> Option<String>` helper, then added
+`backfill_missing_summaries(cfg, paths, &mut records) -> Result<bool>`
+(`src/iteration.rs`): walks records in order tracking a reconstructed running
+best so each gets the correct "best so far *before* this iter" context, and for
+each record missing a summary (skipping `noop`/`killed` and records whose
+`iter-NNNN/changes.diff` is gone) rebuilds the self-contained summary prompt from
+the persisted artifacts, runs the summarizer from the project root, and writes
+`summary.md`. Mid-file mutation needs a full rewrite the append-only model can't
+express, so added `storage::rewrite_iterations(path, recs)` (atomic via the
+existing `write_atomic`; safe under the run lock). Wired the call into
+`run_loop` right after `read_iterations`, best-effort (log + proceed on error),
+so the first prompt's recent slice reflects the backfilled summaries. No flag;
+best-effort throughout.
+
+**Docs.** README how-it-works step (dropped the best-diff clause) + a new
+auto-backfill paragraph under the `[summarize]` config; `src/llms.md` §4
+"Startup backfill" subsection; CHANGELOG `[Unreleased]` (Added: backfill;
+Changed: best-diff section removed); PLAN.md v1 design-notes footnoted as
+superseded.
+
+**Tests.** 7 new: `storage` `rewrite_iterations` round-trip / stray-tmp /
+empty-truncate; `iteration` backfill happy-path (in-memory + jsonl +
+`summary.md`), skip-noop/missing-dir/preexisting, disabled-is-noop, and a
+running-best-context test (stub `cat` summarizer echoes the prompt to assert each
+record saw the correct prior best). prompt.rs snapshot/structural tests updated
+to assert the best section is gone. 210 unit + e2e + signal tests pass; `chk`
+clean.

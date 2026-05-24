@@ -5,12 +5,6 @@ use crate::{
     storage::{GuidanceEntry, IterationRecord, Outcome},
 };
 
-pub struct BestSnapshot<'a> {
-    pub iter: u64,
-    pub score: f64,
-    pub diff: &'a str,
-}
-
 pub struct PromptContext<'a> {
     pub program_md: &'a str,
     pub boundaries: &'a Boundaries,
@@ -18,7 +12,6 @@ pub struct PromptContext<'a> {
     /// last. Rendered as a prominent, authoritative section; empty → omitted.
     pub guidance: &'a [GuidanceEntry],
     pub recent: &'a [IterationRecord],
-    pub best: Option<BestSnapshot<'a>>,
     pub iter: u64,
     pub budget: Duration,
     pub direction: Direction,
@@ -107,28 +100,6 @@ pub fn build_prompt(ctx: &PromptContext) -> String {
                 outcome_label(r.outcome),
                 r.summary,
             );
-        }
-    }
-
-    s.push_str("\n## Best iteration so far\n\n");
-    match &ctx.best {
-        None => {
-            s.push_str("No improvement merged yet.\n");
-        }
-        Some(b) => {
-            let _ = writeln!(
-                s,
-                "iter {}, score {} (direction: {}).",
-                b.iter,
-                format_score_inline(b.score),
-                direction_label(ctx.direction),
-            );
-            s.push_str("\nDiff:\n\n```diff\n");
-            s.push_str(b.diff);
-            if !b.diff.ends_with('\n') {
-                s.push('\n');
-            }
-            s.push_str("```\n");
         }
     }
 
@@ -369,7 +340,6 @@ mod tests {
             boundaries: &b,
             guidance: &[],
             recent: &[],
-            best: None,
             iter: 1,
             budget: Duration::from_secs(60),
             direction: Direction::Min,
@@ -387,7 +357,6 @@ mod tests {
             boundaries: &b,
             guidance: &[],
             recent: &[],
-            best: None,
             iter: 1,
             budget: Duration::from_secs(60),
             direction: Direction::Min,
@@ -400,21 +369,24 @@ mod tests {
     }
 
     #[test]
-    fn prompt_no_history_no_best_message() {
+    fn prompt_no_history_message() {
         let b = Boundaries::default();
         let ctx = PromptContext {
             program_md: "p",
             boundaries: &b,
             guidance: &[],
             recent: &[],
-            best: None,
             iter: 1,
             budget: Duration::from_secs(60),
             direction: Direction::Min,
         };
         let p = build_prompt(&ctx);
         assert!(p.contains("No prior iterations."), "missing: {p}");
-        assert!(p.contains("No improvement merged yet."), "missing: {p}");
+        // The "Best iteration so far" section was removed; assert it's gone.
+        assert!(
+            !p.contains("## Best iteration so far"),
+            "best section should be absent: {p}"
+        );
     }
 
     #[test]
@@ -440,7 +412,6 @@ mod tests {
             boundaries: &b,
             guidance: &[],
             recent: &hist,
-            best: None,
             iter: 8,
             budget: Duration::from_secs(300),
             direction: Direction::Min,
@@ -496,7 +467,6 @@ mod tests {
             boundaries: &b,
             guidance: &[],
             recent: &hist,
-            best: None,
             iter: 8,
             budget: Duration::from_secs(60),
             direction: Direction::Min,
@@ -535,7 +505,6 @@ mod tests {
             boundaries: &b,
             guidance: &[],
             recent: &hist,
-            best: None,
             iter: 8,
             budget: Duration::from_secs(60),
             direction: Direction::Min,
@@ -570,7 +539,6 @@ mod tests {
             boundaries: &b,
             guidance: &guidance,
             recent: &[],
-            best: None,
             iter: 8,
             budget: Duration::from_secs(60),
             direction: Direction::Min,
@@ -601,7 +569,6 @@ mod tests {
             boundaries: &b,
             guidance: &[],
             recent: &[],
-            best: None,
             iter: 1,
             budget: Duration::from_secs(60),
             direction: Direction::Min,
@@ -672,35 +639,6 @@ mod tests {
     }
 
     #[test]
-    fn prompt_with_best_diff_block() {
-        let b = Boundaries::default();
-        let diff = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n";
-        let best = BestSnapshot {
-            iter: 5,
-            score: std::f64::consts::PI,
-            diff,
-        };
-        let ctx = PromptContext {
-            program_md: "p",
-            boundaries: &b,
-            guidance: &[],
-            recent: &[],
-            best: Some(best),
-            iter: 8,
-            budget: Duration::from_secs(60),
-            direction: Direction::Min,
-        };
-        let p = build_prompt(&ctx);
-        assert!(p.contains("```diff\n"), "no opening fence: {p}");
-        assert!(p.contains(diff), "diff body missing: {p}");
-        assert!(p.contains("\n```\n"), "no closing fence: {p}");
-        assert!(
-            p.contains("iter 5, score 3.14159 (direction: min)."),
-            "best line missing: {p}"
-        );
-    }
-
-    #[test]
     fn prompt_snapshot() {
         let b = full_boundaries();
         let hist = vec![
@@ -717,18 +655,11 @@ mod tests {
                 "regressed: 3.15000 vs best 3.14210 (min)",
             ),
         ];
-        let diff = "diff --git a/value.txt b/value.txt\n--- a/value.txt\n+++ b/value.txt\n@@ -1 +1 @@\n-3.10\n+3.14\n";
-        let best = BestSnapshot {
-            iter: 5,
-            score: std::f64::consts::PI,
-            diff,
-        };
         let ctx = PromptContext {
             program_md: "# Pi experiment\n\nMake value.txt closer to pi.\n",
             boundaries: &b,
             guidance: &[],
             recent: &hist,
-            best: Some(best),
             iter: 8,
             budget: Duration::from_secs(300),
             direction: Direction::Min,
@@ -757,21 +688,6 @@ You MUST NOT modify these paths (ENFORCED \u{2014} touching them discards the it
 |------|-----------|------------|--------|
 |    7 | merged    |    3.14210 | improved: 3.14210 from 3.15000 |
 |    6 | discarded |    3.15000 | regressed: 3.15000 vs best 3.14210 (min) |
-
-## Best iteration so far
-
-iter 5, score 3.14159 (direction: min).
-
-Diff:
-
-```diff
-diff --git a/value.txt b/value.txt
---- a/value.txt
-+++ b/value.txt
-@@ -1 +1 @@
--3.10
-+3.14
-```
 
 ## This iteration
 

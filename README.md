@@ -14,9 +14,9 @@ For each iteration, `autorize`:
 
 1. Creates a fresh git worktree off the `autorize/<name>` tracking branch.
 2. Builds a prompt from your `program.md`, the boundary rules, any operator
-   guidance (`autorize tell`), the last 10 iteration records (with a per-outcome
-   reason and, if enabled, a model-written summary of each attempt), and the
-   diff of the best iteration so far.
+   guidance (`autorize tell`), and the last 10 iteration records (with a
+   per-outcome reason and, if enabled, a model-written summary of each
+   attempt).
 3. Spawns your agent (any CLI — Claude Code, a shell script, anything)
    inside the worktree with a hard wall-clock budget. On timeout the whole
    process group gets `SIGTERM`, then `SIGKILL` after 5 s.
@@ -211,6 +211,16 @@ command = "claude --model haiku --print {prompt_file}"
 timeout = "60s"
 stdin   = "none"
 ```
+
+When `[summarize]` is enabled, each iteration's recap is surfaced to the agent
+in later prompts under `## Recent attempt summaries` (so it can learn from
+discarded attempts). At the top of every `autorize run` / `resume`, autorize
+also **backfills** summaries for any records still missing one — those written
+before you enabled `[summarize]`, or whose summarize step failed — by replaying
+the persisted `iter-NNNN/` artifacts (`changes.diff`, `agent.stdout`,
+`agent.stderr`). It is best-effort and skips noops and records whose artifacts
+are gone; the first run after enabling summaries may therefore fire several
+one-time model calls.
 
 `program.md` lives next to `config.toml` and is freeform instructions for the
 agent — included verbatim at the top of every prompt.

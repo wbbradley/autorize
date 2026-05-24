@@ -194,6 +194,21 @@ and output are written to `iter-NNNN/summary-prompt.md` and
 `iter-NNNN/summary.md` (outside the scored worktree, so they never trip
 deny-path enforcement). The summarizer inherits `[agent.env]`.
 
+**Startup backfill.** The live step above only ever runs for the *current*
+iteration as it executes, so records written before `[summarize]` was enabled
+(or whose summarize step failed) would otherwise keep an empty `summary`
+forever. To fix that, at the top of every `autorize run` / `resume` (when
+`enabled = true`) autorize automatically backfills summaries for *all* records
+missing one. It reconstructs each record's "best so far" context, rebuilds the
+same self-contained summary prompt from the persisted `iter-NNNN/` artifacts
+(`changes.diff` + `agent.stdout`/`agent.stderr`, which survive `autorize
+clean`), runs the summarize command from the project root, and rewrites
+`iterations.jsonl` in place (atomic full rewrite under the run lock) plus the
+per-iter `summary.md`. It is best-effort — it skips `noop`/`killed` records and
+records whose `iter-NNNN/` artifacts are gone, and a single failure logs a
+warning and continues without aborting the run. There is no flag; the first run
+after enabling `[summarize]` may fire many one-time, independent model calls.
+
 | Field     | Type     | Default | Notes                                                                                                                                                  |
 |-----------|----------|---------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `enabled` | bool     | `false` when the section is absent; `true` in the scaffolded template | Master switch. When `false`, the step is fully disabled (no behavior change beyond the existing `notes`). |

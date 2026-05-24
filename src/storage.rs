@@ -159,6 +159,21 @@ pub fn read_iterations(path: &Path) -> Result<Vec<IterationRecord>> {
         .collect()
 }
 
+/// Atomically rewrite the entire `iterations.jsonl` from `recs`. The
+/// append-only [`append_iteration`] path can't express a mutation of a
+/// mid-file record (e.g. backfilling a summary), so this serializes every
+/// record to one jsonl buffer and lands it via the same tmp + fsync + rename +
+/// dir-fsync dance as [`write_state`] — no torn file. Safe because `autorize
+/// run` holds the experiment lock, so there is no concurrent writer.
+pub fn rewrite_iterations(path: &Path, recs: &[IterationRecord]) -> Result<()> {
+    let mut buf = String::new();
+    for rec in recs {
+        buf.push_str(&serde_json::to_string(rec)?);
+        buf.push('\n');
+    }
+    write_atomic(path, buf.as_bytes())
+}
+
 /// Append one operator-guidance entry to `guidance.jsonl`. Mirrors
 /// [`append_iteration`]: `O_APPEND` + per-line `fsync` so a concurrent
 /// `autorize tell` (running while `autorize run` loops) lands atomically.
@@ -346,6 +361,62 @@ mod tests {
         for (i, r) in recs.iter().enumerate() {
             assert_eq!(r.iter, i as u64);
         }
+    }
+
+    #[test]
+    fn rewrite_iterations_round_trips() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("iterations.jsonl");
+        // Seed via the append path, then rewrite with a mutated middle record
+        // (what backfill does when it fills in a summary).
+        for i in 0..3u64 {
+            append_iteration(&p, &sample_record(i)).unwrap();
+        }
+        let mut recs = read_iterations(&p).unwrap();
+        recs[1].summary = "backfilled summary".to_string();
+        rewrite_iterations(&p, &recs).unwrap();
+
+        let got = read_iterations(&p).unwrap();
+        assert_eq!(got.len(), 3);
+        for (i, r) in got.iter().enumerate() {
+            assert_eq!(r.iter, i as u64);
+        }
+        assert_eq!(got[0].summary, "");
+        assert_eq!(got[1].summary, "backfilled summary");
+        assert_eq!(got[2].summary, "");
+        // No stray tmp left behind by the atomic rename.
+        assert!(
+            !p.with_extension("json.tmp").exists(),
+            "stray tmp after rewrite"
+        );
+    }
+
+    #[test]
+    fn rewrite_iterations_stray_tmp_doesnt_corrupt_dest() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("iterations.jsonl");
+        append_iteration(&p, &sample_record(0)).unwrap();
+        rewrite_iterations(&p, &read_iterations(&p).unwrap()).unwrap();
+        // Simulate a torn write that never got renamed; the real file must be
+        // untouched and still read back cleanly.
+        let tmp = p.with_extension("json.tmp");
+        fs::write(&tmp, b"GARBAGE-half-write").unwrap();
+        let recs = read_iterations(&p).unwrap();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].iter, 0);
+    }
+
+    #[test]
+    fn rewrite_iterations_empty_truncates() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("iterations.jsonl");
+        append_iteration(&p, &sample_record(0)).unwrap();
+        rewrite_iterations(&p, &[]).unwrap();
+        let recs = read_iterations(&p).unwrap();
+        assert!(
+            recs.is_empty(),
+            "expected empty after rewrite, got {recs:?}"
+        );
     }
 
     #[test]

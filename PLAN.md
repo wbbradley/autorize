@@ -119,6 +119,10 @@ stdin = "none"                              # "none" | "prompt"
 compact table of last 10 iter records · best iteration's full diff (if any) · current iter
 number + budget.
 
+> **Superseded (post-v1):** the "best iteration's full diff" prompt section was removed — the
+> next iteration's worktree already contains the best result on disk, so re-rendering it as
+> prompt text was redundant. See CHANGELOG `[Unreleased]`.
+
 ### Iteration state machine
 
 ```
@@ -184,7 +188,7 @@ disagreement. Tolerate torn last line. Refuse if `base_commit` missing.
 | Agent invocation | Generic subprocess via templated `agent.command` |
 | Work area | `.autorize/<name>/` inside the project |
 | Scheduling | Hard per-iter wall-clock + total deadline (duration or absolute) |
-| Prior-iter context | Last 10 records (compact) + best iter's full diff |
+| Prior-iter context | Last 10 records (compact) + best iter's full diff *(best-diff dropped post-v1; see CHANGELOG `[Unreleased]`)* |
 | Boundary visibility | Prompt-only (no in-tree boundary file) |
 | Objective failure | Default `"invalid"`: discard, don't count |
 | Boundary enforcement | `deny_paths` enforced via diff; `allow_paths` prompt-only |

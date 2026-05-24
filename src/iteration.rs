@@ -7,7 +7,7 @@ use crate::{
     config::{Config, Direction},
     error::{Error, Result},
     experiment::ExperimentPaths,
-    prompt::{self, BestSnapshot, PromptContext, SummaryContext},
+    prompt::{self, PromptContext, SummaryContext},
     scoring::{self, ScoreDecision},
     storage::{self, CurrentStep, GuidanceEntry, IterationRecord, Outcome, StateSnapshot},
     subproc,
@@ -23,7 +23,6 @@ pub struct IterationInputs<'a> {
     pub best: Option<(f64, u64)>,
     pub recent: &'a [IterationRecord],
     pub program_md: &'a str,
-    pub best_diff: Option<&'a str>,
     /// Operator guidance loaded from `guidance.jsonl` at the top of this
     /// iteration; injected verbatim into the prompt.
     pub guidance: &'a [GuidanceEntry],
@@ -63,16 +62,11 @@ pub fn run_iteration(
     }
 
     checkpoint(state, inputs, CurrentStep::BuildPrompt)?;
-    let best_snapshot = match (inputs.best, inputs.best_diff) {
-        (Some((score, iter)), Some(diff)) => Some(BestSnapshot { iter, score, diff }),
-        _ => None,
-    };
     let prompt_text = prompt::build_prompt(&PromptContext {
         program_md: inputs.program_md,
         boundaries: &inputs.cfg.boundaries,
         guidance: inputs.guidance,
         recent: inputs.recent,
-        best: best_snapshot,
         iter: inputs.iter,
         budget: inputs.cfg.iteration.budget,
         direction: inputs.cfg.objective.direction,
@@ -295,47 +289,10 @@ fn summarize_iteration(
         return String::new();
     }
 
-    // Reuse the worker's subprocess machinery (env, workdir_var, signal-safe
-    // budget kill) but with the summarize command/timeout/stdin and its own
-    // prompt file. The summarizer inherits `[agent.env]` so it sees the same
-    // credentials (e.g. ANTHROPIC_API_KEY) as the worker.
-    let out = match agent::run_agent(&AgentSpec {
-        command_template: &inputs.cfg.summarize.command,
-        prompt_file: &prompt_path,
-        workdir,
-        iter: inputs.iter,
-        budget: inputs.cfg.summarize.timeout,
-        workdir_var: &inputs.cfg.agent.workdir_var,
-        env: &inputs.cfg.agent.env,
-        stdin: inputs.cfg.summarize.stdin,
-    }) {
-        Ok(o) => o,
-        Err(e) => {
-            tracing::warn!("summarize: command failed to run: {e}; leaving summary empty");
-            return String::new();
-        }
+    let summary = match run_summarizer(inputs.cfg, workdir, inputs.iter, &prompt_path) {
+        Some(s) => s,
+        None => return String::new(),
     };
-
-    if out.killed_by_budget {
-        tracing::warn!(
-            "summarize: killed by summarize.timeout ({}s); leaving summary empty",
-            inputs.cfg.summarize.timeout.as_secs()
-        );
-        return String::new();
-    }
-    if out.exit_code != Some(0) {
-        tracing::warn!(
-            "summarize: nonzero exit {:?}; leaving summary empty",
-            out.exit_code
-        );
-        return String::new();
-    }
-
-    let summary = out.stdout.trim().to_string();
-    if summary.is_empty() {
-        tracing::warn!("summarize: empty output; leaving summary empty");
-        return String::new();
-    }
 
     let summary_path = iter_dir.join("summary.md");
     tracing::info!("write {}", summary_path.display());
@@ -345,6 +302,153 @@ fn summarize_iteration(
         tracing::warn!("summarize: failed to write {}: {e}", summary_path.display());
     }
     summary
+}
+
+/// Run `summarize.command` against an already-written prompt file and return
+/// its trimmed stdout, or `None` on any best-effort failure (spawn error,
+/// killed by `summarize.timeout`, nonzero exit, or empty output). Reuses the
+/// worker's subprocess machinery (env, workdir_var, signal-safe budget kill)
+/// with the summarize command/timeout/stdin; the summarizer inherits
+/// `[agent.env]` so it sees the same credentials (e.g. ANTHROPIC_API_KEY) as
+/// the worker. Shared by the live `[summarize]` step and the startup backfill.
+fn run_summarizer(cfg: &Config, workdir: &Path, iter: u64, prompt_path: &Path) -> Option<String> {
+    let out = match agent::run_agent(&AgentSpec {
+        command_template: &cfg.summarize.command,
+        prompt_file: prompt_path,
+        workdir,
+        iter,
+        budget: cfg.summarize.timeout,
+        workdir_var: &cfg.agent.workdir_var,
+        env: &cfg.agent.env,
+        stdin: cfg.summarize.stdin,
+    }) {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::warn!("summarize: command failed to run: {e}; leaving summary empty");
+            return None;
+        }
+    };
+
+    if out.killed_by_budget {
+        tracing::warn!(
+            "summarize: killed by summarize.timeout ({}s); leaving summary empty",
+            cfg.summarize.timeout.as_secs()
+        );
+        return None;
+    }
+    if out.exit_code != Some(0) {
+        tracing::warn!(
+            "summarize: nonzero exit {:?}; leaving summary empty",
+            out.exit_code
+        );
+        return None;
+    }
+
+    let summary = out.stdout.trim().to_string();
+    if summary.is_empty() {
+        tracing::warn!("summarize: empty output; leaving summary empty");
+        return None;
+    }
+    Some(summary)
+}
+
+/// Backfill summaries for any records that are missing one, at the top of
+/// `autorize run` / `resume`. The `[summarize]` step only ever runs for the
+/// *current* iteration as it executes, so records written before `[summarize]`
+/// was enabled (or whose summarize step failed) keep an empty `summary`
+/// forever. All the raw material to generate one after the fact is persisted
+/// per-iteration outside the worktree (`iter-NNNN/changes.diff`,
+/// `agent.stdout`, `agent.stderr` — preserved even by `autorize clean`), which
+/// is exactly what [`prompt::build_summary_prompt`] consumes.
+///
+/// Returns `Ok(true)` if any record changed (the caller persists via
+/// [`storage::rewrite_iterations`]). Best-effort throughout: a single record's
+/// failure logs a warning and continues; this never aborts the run. Records
+/// that are `noop`/`killed`, whose `iter-NNNN/changes.diff` is gone, or that
+/// already carry a summary are left untouched.
+pub fn backfill_missing_summaries(
+    cfg: &Config,
+    paths: &ExperimentPaths,
+    records: &mut [IterationRecord],
+) -> Result<bool> {
+    if !cfg.summarize.enabled {
+        return Ok(false);
+    }
+
+    let mut changed = false;
+    // Reconstruct the running best so each record's summary gets the correct
+    // "best so far *before* this iter" context, mirroring the live
+    // `inputs.best`. A merge is by definition the new best.
+    let mut best: Option<(f64, u64)> = None;
+
+    for rec in records.iter_mut() {
+        // The "best so far" context for this record is the running best from
+        // all *prior* iterations — computed before folding this record in.
+        let best_before = best;
+        if rec.outcome == Outcome::Merged
+            && let Some(s) = rec.score
+        {
+            best = Some((s, rec.iter));
+        }
+
+        let needs_summary = rec.summary.is_empty()
+            && rec.outcome != Outcome::Noop
+            && rec.outcome != Outcome::Killed;
+        if !needs_summary {
+            continue;
+        }
+
+        let iter_dir = paths.iter_dir(rec.iter);
+        let diff = match fs::read_to_string(iter_dir.join("changes.diff")) {
+            Ok(d) => d,
+            // No artifacts on disk (e.g. pruned, or a reconciled record that
+            // never wrote a diff): skip silently.
+            Err(_) => continue,
+        };
+        let stdout = fs::read_to_string(iter_dir.join("agent.stdout")).unwrap_or_default();
+        let stderr = fs::read_to_string(iter_dir.join("agent.stderr")).unwrap_or_default();
+
+        let prompt_text = prompt::build_summary_prompt(&SummaryContext {
+            iter: rec.iter,
+            outcome: rec.outcome,
+            score: rec.score,
+            best: best_before,
+            direction: cfg.objective.direction,
+            diff: &diff,
+            stdout_tail: &stdout,
+            stderr_tail: &stderr,
+        });
+        let prompt_path = iter_dir.join("summary-prompt.md");
+        tracing::info!("write {}", prompt_path.display());
+        if let Err(e) = fs::write(&prompt_path, &prompt_text) {
+            tracing::warn!(
+                "backfill: failed to write {}: {e}; skipping iter {}",
+                prompt_path.display(),
+                rec.iter
+            );
+            continue;
+        }
+
+        // The old worktree is gone, and the summarize prompt is self-contained
+        // (the command just reads `{prompt_file}`), so run from the project root.
+        let Some(summary) = run_summarizer(cfg, paths.project_root(), rec.iter, &prompt_path)
+        else {
+            continue;
+        };
+
+        let summary_path = iter_dir.join("summary.md");
+        tracing::info!("write {}", summary_path.display());
+        if let Err(e) = fs::write(&summary_path, &summary) {
+            tracing::warn!("backfill: failed to write {}: {e}", summary_path.display());
+        }
+        rec.summary = summary;
+        changed = true;
+    }
+
+    if changed {
+        storage::rewrite_iterations(&paths.iterations_log(), records)?;
+    }
+    Ok(changed)
 }
 
 fn checkpoint(
@@ -528,7 +632,6 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             best: None,
             recent: &[],
             program_md: "",
-            best_diff: None,
             guidance: &[],
         };
         let mut state = init_state();
@@ -576,7 +679,6 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             best: None,
             recent: &[],
             program_md: "",
-            best_diff: None,
             guidance: &[],
         };
         let mut state = init_state();
@@ -615,7 +717,6 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             best: None,
             recent: &[],
             program_md: "",
-            best_diff: None,
             guidance: &[],
         };
         let mut state = init_state();
@@ -654,7 +755,6 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             best: Some((0.001, 0)),
             recent: &[],
             program_md: "",
-            best_diff: None,
             guidance: &[],
         };
         let mut state = init_state();
@@ -702,7 +802,6 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             best: Some((0.001, 0)),
             recent: &[],
             program_md: "",
-            best_diff: None,
             guidance: &[],
         };
         let mut state = init_state();
@@ -746,7 +845,6 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             best: None,
             recent: &[],
             program_md: "",
-            best_diff: None,
             guidance: &[],
         };
         let mut state = init_state();
@@ -786,7 +884,6 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             best: None,
             recent: &[],
             program_md: "",
-            best_diff: None,
             guidance: &[],
         };
         let mut state = init_state();
@@ -828,7 +925,6 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             best: None,
             recent: &[],
             program_md: "",
-            best_diff: None,
             guidance: &[],
         };
         let mut state = init_state();
@@ -933,7 +1029,6 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             best: None,
             recent: &[],
             program_md: "",
-            best_diff: None,
             guidance: &guidance,
         };
         let mut state = init_state();
@@ -947,6 +1042,160 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         assert!(
             prompt.contains("- (since iter 2) explore a spigot algorithm"),
             "guidance text missing:\n{prompt}"
+        );
+    }
+
+    fn mk_rec(iter: u64, outcome: Outcome, score: Option<f64>, summary: &str) -> IterationRecord {
+        let now = Utc::now();
+        IterationRecord {
+            iter,
+            started_at: now,
+            ended_at: now,
+            outcome,
+            score,
+            best_so_far: score,
+            agent_exit: Some(0),
+            agent_killed_by_budget: false,
+            diff_lines: 1,
+            notes: String::new(),
+            summary: summary.to_string(),
+        }
+    }
+
+    /// Lay down the per-iteration artifacts backfill consumes (`changes.diff`
+    /// + `agent.stdout`), outside any worktree.
+    fn seed_iter_artifacts(paths: &ExperimentPaths, iter: u64) {
+        let d = paths.iter_dir(iter);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("changes.diff"), "diff --git a/x b/x\n+change\n").unwrap();
+        fs::write(d.join("agent.stdout"), "agent did a thing\n").unwrap();
+    }
+
+    /// A config with a deterministic stub summarizer that ignores its prompt
+    /// and emits a fixed marker on stdout.
+    fn summarize_cfg() -> Config {
+        let mut cfg = make_config("true", "bash score.sh", FailMode::Invalid, vec![], false);
+        cfg.summarize.enabled = true;
+        cfg.summarize.stdin = AgentStdin::Prompt;
+        cfg.summarize.command = "echo SUMMARY_MARKER".to_string();
+        cfg
+    }
+
+    #[test]
+    fn backfill_fills_missing_summaries() {
+        // Happy path: records missing a summary but with artifacts on disk get
+        // a summary in-memory, in iterations.jsonl, and in iter-NNNN/summary.md.
+        let tmp = tempdir().unwrap();
+        let paths = ExperimentPaths::new(tmp.path().to_path_buf(), "test".to_string());
+        fs::create_dir_all(paths.root()).unwrap();
+        let cfg = summarize_cfg();
+
+        seed_iter_artifacts(&paths, 1);
+        seed_iter_artifacts(&paths, 2);
+        let mut records = vec![
+            mk_rec(1, Outcome::Merged, Some(0.1), ""),
+            mk_rec(2, Outcome::Discarded, Some(0.5), ""),
+        ];
+        storage::rewrite_iterations(&paths.iterations_log(), &records).unwrap();
+
+        let changed = backfill_missing_summaries(&cfg, &paths, &mut records).unwrap();
+        assert!(changed, "backfill should report a change");
+        assert_eq!(records[0].summary, "SUMMARY_MARKER");
+        assert_eq!(records[1].summary, "SUMMARY_MARKER");
+
+        // Persisted to iterations.jsonl and iter-NNNN/summary.md.
+        let on_disk = storage::read_iterations(&paths.iterations_log()).unwrap();
+        assert_eq!(on_disk[0].summary, "SUMMARY_MARKER");
+        assert_eq!(on_disk[1].summary, "SUMMARY_MARKER");
+        assert_eq!(
+            fs::read_to_string(paths.iter_dir(1).join("summary.md")).unwrap(),
+            "SUMMARY_MARKER"
+        );
+        assert!(paths.iter_dir(1).join("summary-prompt.md").exists());
+    }
+
+    #[test]
+    fn backfill_skips_noop_missing_dir_and_existing() {
+        // A noop record, a record whose iter-NNNN/ artifacts are gone, and a
+        // record that already has a summary are all left untouched.
+        let tmp = tempdir().unwrap();
+        let paths = ExperimentPaths::new(tmp.path().to_path_buf(), "test".to_string());
+        fs::create_dir_all(paths.root()).unwrap();
+        let cfg = summarize_cfg();
+
+        // iter 1: noop (skipped). iter 2: discarded but no artifacts (skipped).
+        // iter 3: merged with a preexisting summary (not overwritten).
+        let mut records = vec![
+            mk_rec(1, Outcome::Noop, None, ""),
+            mk_rec(2, Outcome::Discarded, Some(0.5), ""),
+            mk_rec(3, Outcome::Merged, Some(0.1), "preexisting"),
+        ];
+        // Only iter 3 has artifacts, but it already carries a summary.
+        seed_iter_artifacts(&paths, 3);
+        storage::rewrite_iterations(&paths.iterations_log(), &records).unwrap();
+
+        let changed = backfill_missing_summaries(&cfg, &paths, &mut records).unwrap();
+        assert!(!changed, "nothing eligible should change");
+        assert_eq!(records[0].summary, "");
+        assert_eq!(records[1].summary, "");
+        assert_eq!(records[2].summary, "preexisting");
+        assert!(!paths.iter_dir(1).join("summary.md").exists());
+        assert!(!paths.iter_dir(2).join("summary.md").exists());
+    }
+
+    #[test]
+    fn backfill_disabled_is_noop() {
+        // With summarize disabled, backfill returns Ok(false) and touches
+        // nothing, even when artifacts are present.
+        let tmp = tempdir().unwrap();
+        let paths = ExperimentPaths::new(tmp.path().to_path_buf(), "test".to_string());
+        fs::create_dir_all(paths.root()).unwrap();
+        let mut cfg = summarize_cfg();
+        cfg.summarize.enabled = false;
+
+        seed_iter_artifacts(&paths, 1);
+        let mut records = vec![mk_rec(1, Outcome::Merged, Some(0.1), "")];
+        let changed = backfill_missing_summaries(&cfg, &paths, &mut records).unwrap();
+        assert!(!changed);
+        assert_eq!(records[0].summary, "");
+        assert!(!paths.iter_dir(1).join("summary.md").exists());
+    }
+
+    #[test]
+    fn backfill_uses_running_best_before_each_iter() {
+        // The summary prompt for each record must see the best from *prior*
+        // iterations only, reconstructed by folding merges in order. We make
+        // the stub summarizer echo the prompt back (stdin = "prompt") so we can
+        // inspect the "best so far" line it was handed.
+        let tmp = tempdir().unwrap();
+        let paths = ExperimentPaths::new(tmp.path().to_path_buf(), "test".to_string());
+        fs::create_dir_all(paths.root()).unwrap();
+        let mut cfg = summarize_cfg();
+        // `cat` with stdin = "prompt" echoes the summary prompt as the summary.
+        cfg.summarize.command = "cat".to_string();
+
+        seed_iter_artifacts(&paths, 1);
+        seed_iter_artifacts(&paths, 2);
+        let mut records = vec![
+            mk_rec(1, Outcome::Merged, Some(0.1), ""),
+            mk_rec(2, Outcome::Merged, Some(0.05), ""),
+        ];
+        storage::rewrite_iterations(&paths.iterations_log(), &records).unwrap();
+
+        backfill_missing_summaries(&cfg, &paths, &mut records).unwrap();
+        // iter 1 had no prior best.
+        assert!(
+            records[0].summary.contains("best so far: none"),
+            "iter 1 should see no prior best:\n{}",
+            records[0].summary
+        );
+        // iter 2 should see iter 1's merge (0.1) as the best-before context.
+        assert!(
+            records[1]
+                .summary
+                .contains("best so far: iter 1, score 0.10000"),
+            "iter 2 should see iter 1 as best:\n{}",
+            records[1].summary
         );
     }
 }

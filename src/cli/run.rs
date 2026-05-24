@@ -156,6 +156,15 @@ pub(crate) fn run_loop(
 
     let mut records = storage::read_iterations(&paths.iterations_log())?;
 
+    // When `[summarize]` is enabled, generate summaries for any records still
+    // missing one (written before the step was enabled, or whose summarize
+    // step failed). Best-effort: a failure here must not sink an otherwise
+    // healthy run, and mutating `records` in place means the first prompt's
+    // recent-iterations slice immediately reflects the backfilled summaries.
+    if let Err(e) = iteration::backfill_missing_summaries(&cfg, &paths, &mut records) {
+        tracing::warn!("backfill of missing summaries failed ({e}); continuing");
+    }
+
     loop {
         let now = Utc::now();
         if deadline.is_expired(now) {
@@ -185,7 +194,6 @@ pub(crate) fn run_loop(
             (Some(s), Some(i)) => Some((s, i)),
             _ => None,
         };
-        let best_diff_text = best.and_then(|(_, i)| load_best_diff(&paths, i));
         // Re-read operator guidance every iteration so a concurrent
         // `autorize tell` (or a hand-edit of guidance.jsonl) is picked up. A
         // read error (e.g. a malformed hand-edit) is non-fatal: an expensive
@@ -204,7 +212,6 @@ pub(crate) fn run_loop(
             best,
             recent: &recent,
             program_md: &program_md,
-            best_diff: best_diff_text.as_deref(),
             guidance: &guidance,
         };
 
@@ -241,11 +248,6 @@ fn recent_slice(records: &[IterationRecord], n: usize) -> Vec<IterationRecord> {
     let len = records.len();
     let start = len.saturating_sub(n);
     records[start..].to_vec()
-}
-
-fn load_best_diff(paths: &ExperimentPaths, iter: u64) -> Option<String> {
-    let p = paths.iter_dir(iter).join("changes.diff");
-    fs::read_to_string(p).ok()
 }
 
 /// Reset the run-level stop conditions for `autorize run --fresh`, preserving

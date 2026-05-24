@@ -1,6 +1,14 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.9] - 2026-05-24
+
+### Added
+
+- When `[summarize]` is enabled, `autorize run` / `resume` now **backfill** missing summaries at startup: any `iterations.jsonl` record without a summary (written before `[summarize]` was enabled, or whose summarize step failed) is regenerated from its persisted `iter-NNNN/` artifacts (`changes.diff`, `agent.stdout`, `agent.stderr` — which survive `autorize clean`), then written back to `iterations.jsonl` (atomic full rewrite under the run lock) and `iter-NNNN/summary.md`. There is no flag. It is best-effort: it skips `noop`/`killed` records and records whose artifacts are gone, and a single failure logs a warning and continues without aborting the run. The reconstructed records also feed the very first prompt's recent-iterations slice. The first run after enabling summaries may fire many one-time, independent model calls.
+
+### Changed
+
+- The per-iteration prompt no longer embeds a "Best iteration so far" section with the best iteration's full diff. Each iteration's worktree is created off the `autorize/<name>` branch, which only advances on a merge, so the next iteration's working tree *already contains* the best result on disk (retrievable via `git show HEAD` / `git diff <base_commit>`) — re-rendering it as prompt text was redundant and could bloat the prompt. The recent-iterations table still surfaces the best score.
 
 ## [0.2.8] - 2026-05-24
 
