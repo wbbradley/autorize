@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.7] - 2026-05-24
+
+### Added
+
+- `autorize run --fresh <name>` starts another run on a finished experiment, building on the prior best. It recomputes the deadline from `schedule`, resets the per-run `max_iterations` budget and the consecutive-noop streak, and refreshes `started_at` — while preserving `best_score`/`best_iter`, the `base_commit`, the `autorize/<name>` branch and its tip, and the full `iterations.jsonl` history. New iterations keep comparing against the prior best and keep numbering strictly upward. It is a no-op on a never-run experiment, is refused (with a pointer to `autorize resume`) when an iteration is mid-flight, and errors clearly when the recomputed deadline is an already-past absolute `schedule.deadline` instead of entering a loop that exits immediately. This is the sanctioned replacement for the old "delete `state.json` by hand" recipe.
+- At the default `info` log level, `logs/autorize.log` is now a forensic audit trail: every git invocation (argv + cwd), every subprocess spawn (command + workdir + exit/timeout), and every filesystem mutation (the prompt, agent stdout/stderr, the captured diff, `state.json`, and `iterations.jsonl`) are recorded — dozens of lines per iteration. `agent.env` values (e.g. `ANTHROPIC_API_KEY`) are never logged. Set `RUST_LOG=warn` to quiet this (which also hides the run narrative).
+
+### Changed
+
+- `state.json` gains a `run_iterations_completed` field (per-run iteration count) alongside the lifetime `iterations_completed`. `max_iterations` is now checked against the per-run counter, and `--fresh` resets it. Older `state.json` files load unchanged: the field is migrated on read by seeding it from `iterations_completed`, so a non-fresh re-run stops at the same cap as before.
+- `autorize status` now prints the iteration line as `iterations   N total, M this run` (previously just `iterations   N`). If you parse status output, update accordingly.
+- Reworded `autorize clean`'s output (and its README/llms descriptions) to make clear it only detaches a stale worktree that held the `autorize/<name>` branch — the branch ref itself is never created, moved, or deleted, and is preserved for checkout.
+
+### Fixed
+
+- A crashed iteration that `autorize resume` records as `killed` no longer consumes a `max_iterations` slot. The `killed` record still counts toward the lifetime `iterations_completed`, but the per-run budget is left untouched, so a resumed experiment can complete its full intended number of iterations.
+
 ## [0.2.6] - 2026-05-23
 
 ### Added
