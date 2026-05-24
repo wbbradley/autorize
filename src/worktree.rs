@@ -114,6 +114,24 @@ impl Git {
         Ok(())
     }
 
+    /// Detach the HEAD of the worktree at `wt` at its current commit, freeing
+    /// any branch it had checked out so that branch becomes checkout-able from
+    /// the main repo. Because the target commit is the one already at HEAD, no
+    /// tracked file changes, so this succeeds even on a dirty/staged worktree.
+    /// Used by `autorize clean` to heal pre-v0.2.4 residue where an iteration
+    /// worktree held the tracking branch.
+    pub fn detach_worktree(&self, wt: &Path) -> Result<()> {
+        run_git(&["checkout", "--detach"], wt)?;
+        Ok(())
+    }
+
+    /// `git worktree prune`: drop administrative registrations for worktree
+    /// directories that no longer exist on disk.
+    pub fn worktree_prune(&self) -> Result<()> {
+        run_git(&["worktree", "prune"], &self.repo_root)?;
+        Ok(())
+    }
+
     pub fn worktree_list(&self) -> Result<Vec<WorktreeEntry>> {
         let out = run_git(&["worktree", "list", "--porcelain"], &self.repo_root)?;
         let mut entries = Vec::new();

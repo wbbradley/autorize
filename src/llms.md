@@ -25,6 +25,7 @@ atomically so the loop can be killed and resumed at any point.
 | `autorize run <name>`    | Run the loop until deadline / `max_iterations` / `max_consecutive_noops`.                             |
 | `autorize status <name>` | Print a one-shot summary from `state.json` + `iterations.jsonl`.                                      |
 | `autorize resume <name>` | Recover after a crash; any in-progress iter is recorded as `killed` and the loop continues.           |
+| `autorize clean <name>`  | Tidy a finished/abandoned experiment: free the tracking branch if a worktree holds it, drop stale staged indexes, prune dead worktree registrations. `--remove-worktrees` also deletes kept `wt/` checkouts. Never touches `iterations.jsonl`/`state.json`. |
 | `autorize llms`          | Print this document.                                                                                  |
 
 End-to-end workflow:

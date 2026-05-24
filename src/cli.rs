@@ -1,3 +1,4 @@
+pub mod clean;
 pub mod init;
 pub mod llms;
 pub mod resume;
@@ -24,6 +25,9 @@ pub enum Command {
     Status(status::StatusArgs),
     /// Resume an experiment after a crash or stop.
     Resume(resume::ResumeArgs),
+    /// Tidy a finished/abandoned experiment: free the tracking branch, drop
+    /// stale staged indexes, and prune dead worktree registrations.
+    Clean(clean::CleanArgs),
 }
 
 pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
@@ -33,5 +37,6 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
         Command::Run(a) => run::run(a),
         Command::Status(a) => status::run(a),
         Command::Resume(a) => resume::run(a),
+        Command::Clean(a) => clean::run(a),
     }
 }

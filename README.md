@@ -119,6 +119,7 @@ and stops at "ready to `autorize run <name>`" — it never starts the loop.
 | `autorize run <name>`    | Run the loop until deadline / cap / noop streak. |
 | `autorize status <name>` | One-shot summary from `state.json` + `iterations.jsonl`. |
 | `autorize resume <name>` | Recover after a crash; any in-progress iter is recorded as `killed` and the loop continues. |
+| `autorize clean <name>`  | Tidy a finished/abandoned experiment: free the tracking branch, drop stale staged indexes, prune dead worktree registrations (`--remove-worktrees` also deletes kept `wt/` checkouts). Leaves the log and records intact. |
 | `autorize llms`          | Print an exhaustive agent-targeted markdown reference (config schema, on-disk layout, `IterationRecord`, state machine). |
 
 `autorize run` accepts `--allow-dirty` if you need to start with uncommitted
