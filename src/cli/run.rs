@@ -362,6 +362,7 @@ fn synthesize_merged_record(
         agent_killed_by_budget: false,
         diff_lines: 0,
         notes: "reconciled from branch tip after crash".to_string(),
+        summary: String::new(),
     };
     storage::append_iteration(&paths.iterations_log(), &rec)?;
 
@@ -387,6 +388,7 @@ fn record_killed(paths: &ExperimentPaths, state: &mut StateSnapshot, iter: u64) 
         agent_killed_by_budget: false,
         diff_lines: 0,
         notes: "resumed after crash".to_string(),
+        summary: String::new(),
     };
     storage::append_iteration(&paths.iterations_log(), &rec)?;
 
@@ -476,6 +478,7 @@ mod tests {
             ParseSpec,
             Schedule,
             Setup,
+            Summarize,
             Teardown,
         },
         storage::CurrentStep,
@@ -571,6 +574,7 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
                 env: BTreeMap::new(),
                 stdin: AgentStdin::Prompt,
             },
+            summarize: Summarize::default(),
         }
     }
 

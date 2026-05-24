@@ -172,6 +172,34 @@ environment **before** being passed to the agent.
 | `ANTHROPIC_API_KEY` | string | (none)  | Example entry in the default template — passes the parent env's `$ANTHROPIC_API_KEY` through. |
 | (any name)          | string | (none)  | Any user-defined env var; values with `$VAR` / `${VAR}` are expanded from the parent env.    |
 
+### `[summarize]`
+
+After the worker agent exits, autorize can run a **separate** (typically
+weaker/cheaper) model to write a 1-2 sentence summary of what the iteration
+attempted and why the score moved. These summaries are surfaced to the agent in
+later iterations under a `## Recent attempt summaries` section of the prompt (so
+it can learn from discarded attempts) and by `autorize status` (`last summary`).
+
+The step runs **after** the worker is killed/exits, with its own `command` and
+`timeout` (independent of `iteration.budget`, so the summary is never truncated
+by the worker's budget). It is **skipped** for `noop` iterations (no diff to
+summarize) and is **best-effort**: any failure (model unavailable, timeout,
+nonzero exit, empty output) logs a warning and leaves `summary` empty without
+changing the iteration outcome. The summary prompt is built from the
+iteration's own artifacts only — the diff plus tails of the agent's
+stdout/stderr and the outcome/score/best context — **not** `program.md`
+guidance or prior summaries (kept lean so a cheap model suffices). The prompt
+and output are written to `iter-NNNN/summary-prompt.md` and
+`iter-NNNN/summary.md` (outside the scored worktree, so they never trip
+deny-path enforcement). The summarizer inherits `[agent.env]`.
+
+| Field     | Type     | Default | Notes                                                                                                                                                  |
+|-----------|----------|---------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `enabled` | bool     | `false` when the section is absent; `true` in the scaffolded template | Master switch. When `false`, the step is fully disabled (no behavior change beyond the existing `notes`). |
+| `command` | string   | (required when enabled) | Shell command for the summarizer. Same `{prompt_file}` / `{workdir}` / `{iter}` substitutions as `[agent]`. Must contain `{prompt_file}` when `stdin = "none"`. Default template uses `claude --model haiku --print {prompt_file}` (overridable). |
+| `timeout` | duration | `"60s"` | humantime duration; hard wall-clock budget for the summarize command, independent of `iteration.budget`.                                              |
+| `stdin`   | enum     | `"none"` | `"none"` or `"prompt"`, mirroring `[agent].stdin`. `"none"` requires `{prompt_file}` in `command`.                                                     |
+
 ## 5. `objective.parse` variants
 
 All three accept input from the scoring command's stdout.
@@ -284,6 +312,8 @@ killed iterations.
       changes.diff           # captured diff vs autorize/<name>
       agent.stdout
       agent.stderr
+      summary-prompt.md      # prompt sent to the [summarize] model (if enabled & non-noop)
+      summary.md             # the model-written summary captured into the record
       wt/                    # the worktree (only if iteration.keep_worktrees = true)
     iter-0002/
     ...
@@ -326,6 +356,7 @@ Each line in `iterations.jsonl` is one `IterationRecord` JSON object:
 | `agent_killed_by_budget` | bool                  | `true` if the wall-clock budget killed the agent process group.                    |
 | `diff_lines`             | integer (u64)         | Line count of `iter-NNNN/changes.diff`.                                            |
 | `notes`                  | string                | Harness-derived reason for the outcome. Normal iterations are now annotated: `"improved: <score> from <prev best>"` / `"first valid score: <score>"` (merged), `"regressed: <score> vs best <best> (<direction>)"` (discarded), `"denied: touched <paths>"` (denied), `"invalid: <detail>"` (invalid), `"no changes produced"` (noop). Recovery records still use it (`"resumed after crash"`, `"reconciled from branch tip after crash"`). Shown in the next iteration's recent-iterations table and in `autorize status`. |
+| `summary`                | string                | Optional model-written 1-2 sentence recap of what the iteration attempted and why the score moved, produced by the `[summarize]` step (§4). Empty when summarization is disabled, the iteration was a `noop`, or the step failed (best-effort). Surfaced in the next iteration's prompt under `## Recent attempt summaries` and in `autorize status` (`last summary`). `#[serde(default)]`, so pre-A2 logs without this field still load. |
 
 `state.json` is a single `StateSnapshot` JSON object:
 

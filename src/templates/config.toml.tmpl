@@ -71,3 +71,23 @@ stdin = "none"
 
 [agent.env]
 ANTHROPIC_API_KEY = "$ANTHROPIC_API_KEY"
+
+# Post-iteration summarization.
+#
+# After the worker agent exits, autorize runs a SEPARATE (typically weaker and
+# cheaper) model to write a 1-2 sentence summary of what the iteration
+# attempted and why the score moved. Those summaries are shown to the agent in
+# later iterations under "Recent attempt summaries", so it can learn from
+# discarded attempts instead of re-exploring dead ends.
+#
+# This step has its own `command` and `timeout` (independent of
+# `iteration.budget`), is skipped for no-op iterations, and is best-effort: any
+# failure (model unavailable, timeout, nonzero exit) leaves the summary empty
+# without affecting the iteration outcome. `command` substitutions
+# ({prompt_file}, {workdir}, {iter}) and `stdin` modes mirror [agent]; the
+# summarizer inherits [agent.env]. Set `enabled = false` to disable.
+[summarize]
+enabled = true
+command = "claude --model haiku --print {prompt_file}"
+timeout = "60s"
+stdin = "none"

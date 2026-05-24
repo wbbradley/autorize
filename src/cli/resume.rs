@@ -48,6 +48,7 @@ mod tests {
             ParseSpec,
             Schedule,
             Setup,
+            Summarize,
             Teardown,
         },
         storage::{self, CurrentStep, IterationRecord, Outcome, StateSnapshot},
@@ -127,6 +128,7 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
                 env: BTreeMap::new(),
                 stdin: AgentStdin::Prompt,
             },
+            summarize: Summarize::default(),
         }
     }
 
@@ -322,6 +324,7 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             agent_killed_by_budget: false,
             diff_lines: 1,
             notes: String::new(),
+            summary: String::new(),
         };
         storage::append_iteration(&root.join("iterations.jsonl"), &existing).unwrap();
 

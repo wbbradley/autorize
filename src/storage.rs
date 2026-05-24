@@ -53,6 +53,13 @@ pub struct IterationRecord {
     pub diff_lines: u64,
     #[serde(default)]
     pub notes: String,
+    /// Model-generated 1-2 sentence summary of what this iteration attempted
+    /// and why the score moved, written by the optional `[summarize]` step
+    /// after the worker agent exits. Empty when summarization is disabled, the
+    /// iteration was a `noop`, or the summarize step failed (best-effort).
+    /// `#[serde(default)]` keeps pre-A2 `iterations.jsonl` logs loadable.
+    #[serde(default)]
+    pub summary: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -194,6 +201,7 @@ mod tests {
             agent_killed_by_budget: false,
             diff_lines: 4,
             notes: String::new(),
+            summary: String::new(),
         }
     }
 
@@ -346,6 +354,27 @@ mod tests {
         assert!(!text.contains("\"best_score\":null"), "got: {text}");
         let back: StateSnapshot = serde_json::from_str(&text).unwrap();
         assert_eq!(back.best_score, Some(f64::MAX));
+    }
+
+    #[test]
+    fn pre_a2_record_without_summary_loads_with_empty_summary() {
+        // A line written before the `summary` field existed must still parse,
+        // defaulting `summary` to "".
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("iterations.jsonl");
+        let legacy = r#"{"iter":1,"started_at":"2026-05-20T08:00:00Z","ended_at":"2026-05-20T08:01:00Z","outcome":"merged","score":2.5,"best_so_far":2.5,"agent_exit":0,"agent_killed_by_budget":false,"diff_lines":4,"notes":"first valid score: 2.500000"}"#;
+        let mut f = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&p)
+            .unwrap();
+        f.write_all(legacy.as_bytes()).unwrap();
+        f.write_all(b"\n").unwrap();
+        f.sync_all().unwrap();
+        let recs = read_iterations(&p).unwrap();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].summary, "");
+        assert_eq!(recs[0].notes, "first valid score: 2.500000");
     }
 
     #[test]

@@ -18,6 +18,8 @@ pub struct Config {
     pub iteration: Iteration,
     pub schedule: Schedule,
     pub agent: Agent,
+    #[serde(default)]
+    pub summarize: Summarize,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -154,6 +156,36 @@ pub enum AgentStdin {
     Prompt,
 }
 
+/// Post-iteration summarization. After the worker agent exits, autorize can
+/// run a SEPARATE (typically weaker/cheaper) model to write a 1-2 sentence
+/// summary of what the iteration attempted and why the score moved. It has its
+/// own command and timeout (independent of `iteration.budget`), mirrors
+/// `[agent]`'s `{prompt_file}`/`{workdir}`/`{iter}` substitution and `stdin`
+/// modes, and is best-effort: any failure leaves the summary empty without
+/// affecting the iteration outcome. Disabled when the section is absent.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Summarize {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub command: String,
+    #[serde(with = "humantime_serde", default = "default_summarize_timeout")]
+    pub timeout: Duration,
+    #[serde(default)]
+    pub stdin: AgentStdin,
+}
+
+impl Default for Summarize {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            command: String::new(),
+            timeout: default_summarize_timeout(),
+            stdin: AgentStdin::None,
+        }
+    }
+}
+
 fn default_objective_timeout() -> Duration {
     Duration::from_secs(60)
 }
@@ -163,6 +195,10 @@ fn default_setup_timeout() -> Duration {
 }
 
 fn default_teardown_timeout() -> Duration {
+    Duration::from_secs(60)
+}
+
+fn default_summarize_timeout() -> Duration {
     Duration::from_secs(60)
 }
 
@@ -256,6 +292,23 @@ impl Config {
             return Err(Error::Config(
                 "objective.parse jq path must be non-empty".to_string(),
             ));
+        }
+
+        if self.summarize.enabled {
+            if self.summarize.command.trim().is_empty() {
+                return Err(Error::Config(
+                    "summarize.command must be non-empty when summarize.enabled is true"
+                        .to_string(),
+                ));
+            }
+            if matches!(self.summarize.stdin, AgentStdin::None)
+                && !self.summarize.command.contains("{prompt_file}")
+            {
+                return Err(Error::Config(
+                    "summarize.command must contain `{prompt_file}` when summarize.stdin is \"none\""
+                        .to_string(),
+                ));
+            }
         }
 
         Ok(())
@@ -427,5 +480,62 @@ command = "claude --print {prompt_file}"
     fn parses_5m_budget() {
         let cfg = Config::from_toml(&base_toml()).unwrap();
         assert_eq!(cfg.iteration.budget, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn summarize_disabled_by_default_when_section_absent() {
+        // base_toml has no [summarize] — it must default to disabled, which is
+        // the back-compatible no-op behavior for pre-existing experiments.
+        let cfg = Config::from_toml(&base_toml()).unwrap();
+        assert!(!cfg.summarize.enabled);
+        assert_eq!(cfg.summarize.timeout, Duration::from_secs(60));
+        assert_eq!(cfg.summarize.stdin, AgentStdin::None);
+    }
+
+    #[test]
+    fn parses_summarize_section() {
+        let s = format!(
+            "{}\n[summarize]\nenabled = true\ncommand = \"claude --model haiku --print {{prompt_file}}\"\ntimeout = \"30s\"\nstdin = \"none\"\n",
+            base_toml()
+        );
+        let cfg = Config::from_toml(&s).unwrap();
+        assert!(cfg.summarize.enabled);
+        assert_eq!(cfg.summarize.timeout, Duration::from_secs(30));
+        assert_eq!(cfg.summarize.stdin, AgentStdin::None);
+        assert!(cfg.summarize.command.contains("haiku"));
+    }
+
+    #[test]
+    fn default_template_enables_summarize() {
+        let cfg = Config::from_toml(&render_config("foo")).unwrap();
+        assert!(cfg.summarize.enabled);
+        assert!(cfg.summarize.command.contains("{prompt_file}"));
+    }
+
+    #[test]
+    fn rejects_enabled_summarize_without_command() {
+        let s = format!("{}\n[summarize]\nenabled = true\n", base_toml());
+        let err = Config::from_toml(&s).unwrap_err();
+        assert!(format!("{err}").contains("summarize.command"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_summarize_stdin_none_without_placeholder() {
+        let s = format!(
+            "{}\n[summarize]\nenabled = true\ncommand = \"claude --print\"\nstdin = \"none\"\n",
+            base_toml()
+        );
+        let err = Config::from_toml(&s).unwrap_err();
+        assert!(format!("{err}").contains("prompt_file"), "got: {err}");
+    }
+
+    #[test]
+    fn accepts_summarize_stdin_prompt_without_placeholder() {
+        let s = format!(
+            "{}\n[summarize]\nenabled = true\ncommand = \"claude --print -\"\nstdin = \"prompt\"\n",
+            base_toml()
+        );
+        let cfg = Config::from_toml(&s).unwrap();
+        assert_eq!(cfg.summarize.stdin, AgentStdin::Prompt);
     }
 }

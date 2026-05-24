@@ -58,6 +58,11 @@ fn format_summary(state: &StateSnapshot, records: &[IterationRecord]) -> String 
     {
         s.push_str(&format!("last reason   {}\n", r.notes));
     }
+    if let Some(r) = last
+        && !r.summary.is_empty()
+    {
+        s.push_str(&format!("last summary  {}\n", r.summary));
+    }
     match (state.best_iter, state.best_score) {
         (Some(i), Some(sc)) => s.push_str(&format!("best         iter {i}, score {sc:.6}\n")),
         _ => s.push_str("best         (none)\n"),
@@ -128,6 +133,7 @@ mod tests {
             agent_killed_by_budget: false,
             diff_lines: 4,
             notes: String::new(),
+            summary: String::new(),
         }
     }
 
@@ -173,6 +179,28 @@ mod tests {
             out.contains("last reason   regressed: 3.150000 vs best 3.140000 (min)"),
             "got: {out}"
         );
+    }
+
+    #[test]
+    fn status_prints_last_summary() {
+        let mut state = sample_state();
+        state.best_iter = Some(2);
+        state.best_score = Some(std::f64::consts::PI);
+        let mut last = sample_record(2, Outcome::Merged);
+        last.summary = "Switched to a spigot algorithm, improving accuracy.".to_string();
+        let out = format_summary(&state, &[last]);
+        assert!(
+            out.contains("last summary  Switched to a spigot algorithm, improving accuracy."),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn status_omits_summary_when_empty() {
+        let state = sample_state();
+        // sample_record has an empty summary.
+        let out = format_summary(&state, &[sample_record(1, Outcome::Merged)]);
+        assert!(!out.contains("last summary"), "got: {out}");
     }
 
     #[test]

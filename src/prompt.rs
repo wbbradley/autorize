@@ -21,6 +21,20 @@ pub struct PromptContext<'a> {
     pub direction: Direction,
 }
 
+/// Inputs to [`build_summary_prompt`] — the artifacts of a single iteration,
+/// assembled into the prompt handed to the (separate, typically weaker)
+/// summarization model after the worker agent exits.
+pub struct SummaryContext<'a> {
+    pub iter: u64,
+    pub outcome: Outcome,
+    pub score: Option<f64>,
+    pub best: Option<(f64, u64)>,
+    pub direction: Direction,
+    pub diff: &'a str,
+    pub stdout_tail: &'a str,
+    pub stderr_tail: &'a str,
+}
+
 #[allow(dead_code)] // wired in by Phase 4 iteration
 pub fn build_prompt(ctx: &PromptContext) -> String {
     let mut s = String::new();
@@ -48,6 +62,27 @@ pub fn build_prompt(ctx: &PromptContext) -> String {
         s.push_str("No prior iterations.\n");
     } else {
         push_history_table(&mut s, ctx.recent);
+    }
+
+    // Multi-sentence model-written summaries don't fit in the table cell above,
+    // so they get their own list. Only rendered when at least one recent record
+    // carries a non-empty `summary` (i.e. the `[summarize]` step produced one).
+    let summarized: Vec<&IterationRecord> = ctx
+        .recent
+        .iter()
+        .filter(|r| !r.summary.is_empty())
+        .collect();
+    if !summarized.is_empty() {
+        s.push_str("\n## Recent attempt summaries\n\n");
+        for r in summarized {
+            let _ = writeln!(
+                s,
+                "- iter {} ({}): {}",
+                r.iter,
+                outcome_label(r.outcome),
+                r.summary,
+            );
+        }
     }
 
     s.push_str("\n## Best iteration so far\n\n");
@@ -93,6 +128,112 @@ pub fn build_prompt(ctx: &PromptContext) -> String {
     );
 
     s
+}
+
+/// Maximum diff / stdio lines fed to the summarizer. Bounds the prompt so a
+/// cheap model isn't blown out by a huge diff or a chatty agent; stdio is
+/// tailed (the tail holds the agent's final reasoning), the diff is headed
+/// (the leading hunks identify what was changed).
+const SUMMARY_MAX_DIFF_LINES: usize = 600;
+const SUMMARY_MAX_STDIO_LINES: usize = 80;
+
+/// Build the prompt for the post-iteration summarization model. Self-contained:
+/// it carries only this iteration's own artifacts (outcome, score, the diff,
+/// and tails of the agent's stdout/stderr) — deliberately *not* the program
+/// guidance or prior summaries, so it can run cheaply.
+pub fn build_summary_prompt(ctx: &SummaryContext) -> String {
+    let mut s = String::new();
+    s.push_str(
+        "You are summarizing one iteration of an automated code-improvement run. \
+         In 1-2 sentences, state what this iteration attempted and why it moved \
+         the score the way it did. Be concrete and specific about the change. \
+         Output only the summary text \u{2014} no preamble, no markdown headers.\n\n",
+    );
+
+    let _ = writeln!(s, "## Outcome");
+    let _ = writeln!(s, "- iteration: {}", ctx.iter);
+    let _ = writeln!(s, "- outcome: {}", outcome_label(ctx.outcome));
+    let _ = writeln!(
+        s,
+        "- score: {} (objective direction: {} \u{2014} {})",
+        match ctx.score {
+            Some(v) => format_score_inline(v),
+            None => "none".to_string(),
+        },
+        direction_label(ctx.direction),
+        direction_explanation(ctx.direction),
+    );
+    match ctx.best {
+        Some((bs, bi)) => {
+            let _ = writeln!(
+                s,
+                "- best so far: iter {bi}, score {}",
+                format_score_inline(bs)
+            );
+        }
+        None => {
+            let _ = writeln!(s, "- best so far: none");
+        }
+    }
+
+    s.push_str("\n## Diff\n\n```diff\n");
+    s.push_str(&head_lines(ctx.diff, SUMMARY_MAX_DIFF_LINES));
+    if !ctx.diff.is_empty() && !ctx.diff.ends_with('\n') {
+        s.push('\n');
+    }
+    s.push_str("```\n");
+
+    let stdout_tail = tail_lines(ctx.stdout_tail, SUMMARY_MAX_STDIO_LINES);
+    if !stdout_tail.trim().is_empty() {
+        s.push_str("\n## Agent stdout (tail)\n\n```\n");
+        s.push_str(&stdout_tail);
+        if !stdout_tail.ends_with('\n') {
+            s.push('\n');
+        }
+        s.push_str("```\n");
+    }
+
+    let stderr_tail = tail_lines(ctx.stderr_tail, SUMMARY_MAX_STDIO_LINES);
+    if !stderr_tail.trim().is_empty() {
+        s.push_str("\n## Agent stderr (tail)\n\n```\n");
+        s.push_str(&stderr_tail);
+        if !stderr_tail.ends_with('\n') {
+            s.push('\n');
+        }
+        s.push_str("```\n");
+    }
+
+    s
+}
+
+/// First `n` lines of `s` (used for the diff: leading hunks identify the
+/// change). Returns the whole string when it has `n` lines or fewer.
+fn head_lines(s: &str, n: usize) -> String {
+    let mut out = String::new();
+    for (i, line) in s.lines().enumerate() {
+        if i >= n {
+            let _ = writeln!(out, "... ({} more lines truncated)", s.lines().count() - n);
+            break;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// Last `n` lines of `s` (used for stdio: the tail holds the agent's final
+/// output). Returns the whole string when it has `n` lines or fewer.
+fn tail_lines(s: &str, n: usize) -> String {
+    let lines: Vec<&str> = s.lines().collect();
+    if lines.len() <= n {
+        return s.to_string();
+    }
+    let mut out = format!("... ({} earlier lines truncated)\n", lines.len() - n);
+    for line in &lines[lines.len() - n..] {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
 }
 
 fn push_path_list(s: &mut String, paths: &[String]) {
@@ -163,6 +304,16 @@ mod tests {
     use super::*;
 
     fn rec(iter: u64, outcome: Outcome, score: Option<f64>, notes: &str) -> IterationRecord {
+        rec_with_summary(iter, outcome, score, notes, "")
+    }
+
+    fn rec_with_summary(
+        iter: u64,
+        outcome: Outcome,
+        score: Option<f64>,
+        notes: &str,
+        summary: &str,
+    ) -> IterationRecord {
         IterationRecord {
             iter,
             started_at: Utc.with_ymd_and_hms(2026, 5, 20, 8, 0, 0).unwrap(),
@@ -174,6 +325,7 @@ mod tests {
             agent_killed_by_budget: false,
             diff_lines: 1,
             notes: notes.to_string(),
+            summary: summary.to_string(),
         }
     }
 
@@ -286,6 +438,139 @@ mod tests {
         assert!(
             p.contains("|    5 | noop      |          \u{2014} | no changes produced |"),
             "row 5 missing: {p}"
+        );
+    }
+
+    #[test]
+    fn prompt_renders_recent_summaries_section() {
+        let b = Boundaries::default();
+        let hist = vec![
+            rec_with_summary(
+                6,
+                Outcome::Discarded,
+                Some(3.15),
+                "regressed: ...",
+                "Tuned the Leibniz series term count up; slower convergence regressed the score.",
+            ),
+            // A record with no summary must not appear in the list.
+            rec(5, Outcome::Noop, None, "no changes produced"),
+            rec_with_summary(
+                7,
+                Outcome::Merged,
+                Some(std::f64::consts::PI),
+                "improved: ...",
+                "Switched to a spigot algorithm, improving the digit accuracy.",
+            ),
+        ];
+        let ctx = PromptContext {
+            program_md: "p",
+            boundaries: &b,
+            recent: &hist,
+            best: None,
+            iter: 8,
+            budget: Duration::from_secs(60),
+            direction: Direction::Min,
+        };
+        let p = build_prompt(&ctx);
+        assert!(
+            p.contains("## Recent attempt summaries"),
+            "summaries section missing: {p}"
+        );
+        assert!(
+            p.contains("- iter 6 (discarded): Tuned the Leibniz series term count up;"),
+            "iter 6 summary missing: {p}"
+        );
+        assert!(
+            p.contains("- iter 7 (merged): Switched to a spigot algorithm,"),
+            "iter 7 summary missing: {p}"
+        );
+        // The summary-less noop iteration must not appear in the list.
+        assert!(
+            !p.contains("- iter 5 "),
+            "iter 5 (no summary) should be omitted: {p}"
+        );
+    }
+
+    #[test]
+    fn prompt_omits_summaries_section_when_all_empty() {
+        let b = Boundaries::default();
+        let hist = vec![rec(
+            7,
+            Outcome::Merged,
+            Some(std::f64::consts::PI),
+            "improved: ...",
+        )];
+        let ctx = PromptContext {
+            program_md: "p",
+            boundaries: &b,
+            recent: &hist,
+            best: None,
+            iter: 8,
+            budget: Duration::from_secs(60),
+            direction: Direction::Min,
+        };
+        let p = build_prompt(&ctx);
+        assert!(
+            !p.contains("## Recent attempt summaries"),
+            "summaries section should be omitted when no summaries: {p}"
+        );
+    }
+
+    #[test]
+    fn summary_prompt_includes_outcome_diff_and_stdio() {
+        let ctx = SummaryContext {
+            iter: 7,
+            outcome: Outcome::Merged,
+            score: Some(std::f64::consts::PI),
+            best: Some((3.15, 6)),
+            direction: Direction::Min,
+            diff: "diff --git a/x b/x\n-old\n+new\n",
+            stdout_tail: "agent did a thing\n",
+            stderr_tail: "",
+        };
+        let p = build_summary_prompt(&ctx);
+        assert!(p.contains("1-2 sentences"), "instruction missing: {p}");
+        assert!(p.contains("outcome: merged"), "outcome missing: {p}");
+        assert!(p.contains("score: 3.14159"), "score missing: {p}");
+        assert!(
+            p.contains("best so far: iter 6, score 3.15000"),
+            "best missing: {p}"
+        );
+        assert!(p.contains("```diff\n"), "diff fence missing: {p}");
+        assert!(p.contains("+new"), "diff body missing: {p}");
+        assert!(p.contains("agent did a thing"), "stdout tail missing: {p}");
+        // Empty stderr renders no stderr section.
+        assert!(
+            !p.contains("## Agent stderr"),
+            "stderr section should be omitted: {p}"
+        );
+    }
+
+    #[test]
+    fn summary_prompt_tails_long_stdout() {
+        let stdout: String = (0..200).map(|i| format!("line {i}\n")).collect();
+        let ctx = SummaryContext {
+            iter: 1,
+            outcome: Outcome::Discarded,
+            score: Some(1.0),
+            best: None,
+            direction: Direction::Max,
+            diff: "diff\n",
+            stdout_tail: &stdout,
+            stderr_tail: "",
+        };
+        let p = build_summary_prompt(&ctx);
+        assert!(
+            p.contains("earlier lines truncated"),
+            "tail marker missing: {p}"
+        );
+        assert!(
+            p.contains("line 199"),
+            "last line should survive the tail: {p}"
+        );
+        assert!(
+            !p.contains("line 0\n"),
+            "first line should be truncated: {p}"
         );
     }
 

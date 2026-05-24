@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- New `[summarize]` config section: after the worker agent exits, autorize can run a **separate** (typically weaker/cheaper) model to write a 1-2 sentence summary of what the iteration attempted and why the score moved. Summaries are surfaced to the agent in later iterations under a `## Recent attempt summaries` prompt section (so it can learn from discarded attempts instead of re-exploring dead ends) and by `autorize status` (`last summary`). The step has its own `command` and `timeout` (independent of `iteration.budget`), mirrors `[agent]`'s `{prompt_file}`/`{workdir}`/`{iter}` substitution and `stdin` modes, inherits `[agent.env]`, and writes `iter-NNNN/summary-prompt.md` + `iter-NNNN/summary.md` outside the scored worktree. It is skipped for `noop` iterations and is best-effort: any failure (model unavailable, timeout, nonzero exit) leaves the summary empty without affecting the iteration outcome. Disabled by default when the section is absent (back-compatible); the scaffolded `config.toml` enables it with `claude --model haiku --print {prompt_file}`.
+- `IterationRecord` gains a `summary` field in `iterations.jsonl`. It is `#[serde(default)]`, so pre-existing logs without the field still load.
+
 ## [0.2.7] - 2026-05-24
 
 ### Added

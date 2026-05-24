@@ -5,7 +5,9 @@ iteration as the freeform "program" — the steady, project-specific guidance
 about *what to improve and how*. The harness appends a compact context block
 (last 10 iterations — each annotated with a short reason for its outcome, e.g.
 `regressed: 3.15 vs best 3.14 (min)` — the best diff so far, and the current
-iteration number and budget) at run time.
+iteration number and budget) at run time. When the `[summarize]` step is
+enabled, a "Recent attempt summaries" list of model-written 1-2 sentence
+recaps of recent attempts is also appended automatically.
 
 Tips:
 - Be specific about what counts as an improvement. The objective command

@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fs};
+use std::{collections::BTreeMap, fs, path::Path};
 
 use chrono::Utc;
 
@@ -7,7 +7,7 @@ use crate::{
     config::{Config, Direction},
     error::{Error, Result},
     experiment::ExperimentPaths,
-    prompt::{self, BestSnapshot, PromptContext},
+    prompt::{self, BestSnapshot, PromptContext, SummaryContext},
     scoring::{self, ScoreDecision},
     storage::{self, CurrentStep, IterationRecord, Outcome, StateSnapshot},
     subproc,
@@ -193,6 +193,27 @@ pub fn run_iteration(
         }
     }
 
+    // Best-effort post-iteration summary (A2). Runs AFTER the worker exits,
+    // bounded by `summarize.timeout` independently of `iteration.budget`. Done
+    // while the worktree still exists (it is the summarizer's `{workdir}`) but
+    // writing only under `iter_dir/`, never `wt/`, so it can't trip deny
+    // enforcement. Skipped for `noop` (no diff to summarize) and when disabled;
+    // any failure leaves `summary` empty without affecting the outcome.
+    let summary = if inputs.cfg.summarize.enabled && outcome != Outcome::Noop {
+        summarize_iteration(
+            inputs,
+            &iter_dir,
+            &wt,
+            outcome,
+            final_score,
+            &diff_text,
+            &agent_out.stdout,
+            &agent_out.stderr,
+        )
+    } else {
+        String::new()
+    };
+
     checkpoint(state, inputs, CurrentStep::Cleanup)?;
     if !inputs.cfg.iteration.keep_worktrees {
         inputs.git.worktree_remove(&wt)?;
@@ -210,6 +231,7 @@ pub fn run_iteration(
         agent_killed_by_budget: agent_out.killed_by_budget,
         diff_lines,
         notes,
+        summary,
     };
     storage::append_iteration(&inputs.paths.iterations_log(), &record)?;
 
@@ -229,6 +251,96 @@ pub fn run_iteration(
     storage::write_state(&inputs.paths.state_path(), state)?;
 
     Ok(record)
+}
+
+/// Run the optional `[summarize]` step for one iteration. Builds a
+/// self-contained summary prompt from the iteration's own artifacts (the diff,
+/// stdio tails, outcome/score/best), writes it to `iter_dir/summary-prompt.md`,
+/// runs `summarize.command` through the same subprocess machinery as the worker
+/// (bounded by `summarize.timeout`), and returns the trimmed stdout — also
+/// persisted to `iter_dir/summary.md`.
+///
+/// Best-effort by contract: this never returns an `Err` and never mutates the
+/// iteration outcome. Any failure (spawn error, timeout, nonzero exit, empty
+/// output, artifact write error) logs a warning and yields an empty summary.
+#[allow(clippy::too_many_arguments)]
+fn summarize_iteration(
+    inputs: &IterationInputs,
+    iter_dir: &Path,
+    workdir: &Path,
+    outcome: Outcome,
+    score: Option<f64>,
+    diff: &str,
+    stdout: &str,
+    stderr: &str,
+) -> String {
+    let prompt_text = prompt::build_summary_prompt(&SummaryContext {
+        iter: inputs.iter,
+        outcome,
+        score,
+        best: inputs.best,
+        direction: inputs.cfg.objective.direction,
+        diff,
+        stdout_tail: stdout,
+        stderr_tail: stderr,
+    });
+    let prompt_path = iter_dir.join("summary-prompt.md");
+    tracing::info!("write {}", prompt_path.display());
+    if let Err(e) = fs::write(&prompt_path, &prompt_text) {
+        tracing::warn!("summarize: failed to write {}: {e}", prompt_path.display());
+        return String::new();
+    }
+
+    // Reuse the worker's subprocess machinery (env, workdir_var, signal-safe
+    // budget kill) but with the summarize command/timeout/stdin and its own
+    // prompt file. The summarizer inherits `[agent.env]` so it sees the same
+    // credentials (e.g. ANTHROPIC_API_KEY) as the worker.
+    let out = match agent::run_agent(&AgentSpec {
+        command_template: &inputs.cfg.summarize.command,
+        prompt_file: &prompt_path,
+        workdir,
+        iter: inputs.iter,
+        budget: inputs.cfg.summarize.timeout,
+        workdir_var: &inputs.cfg.agent.workdir_var,
+        env: &inputs.cfg.agent.env,
+        stdin: inputs.cfg.summarize.stdin,
+    }) {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::warn!("summarize: command failed to run: {e}; leaving summary empty");
+            return String::new();
+        }
+    };
+
+    if out.killed_by_budget {
+        tracing::warn!(
+            "summarize: killed by summarize.timeout ({}s); leaving summary empty",
+            inputs.cfg.summarize.timeout.as_secs()
+        );
+        return String::new();
+    }
+    if out.exit_code != Some(0) {
+        tracing::warn!(
+            "summarize: nonzero exit {:?}; leaving summary empty",
+            out.exit_code
+        );
+        return String::new();
+    }
+
+    let summary = out.stdout.trim().to_string();
+    if summary.is_empty() {
+        tracing::warn!("summarize: empty output; leaving summary empty");
+        return String::new();
+    }
+
+    let summary_path = iter_dir.join("summary.md");
+    tracing::info!("write {}", summary_path.display());
+    if let Err(e) = fs::write(&summary_path, &summary) {
+        // The artifact write failed but we still have the text in-memory; keep
+        // it in the record rather than discarding a successful summarization.
+        tracing::warn!("summarize: failed to write {}: {e}", summary_path.display());
+    }
+    summary
 }
 
 fn checkpoint(
@@ -273,6 +385,7 @@ mod tests {
         ParseSpec,
         Schedule,
         Setup,
+        Summarize,
         Teardown,
     };
 
@@ -368,6 +481,7 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
                 env: BTreeMap::new(),
                 stdin: AgentStdin::Prompt,
             },
+            summarize: Summarize::default(),
         }
     }
 
@@ -677,5 +791,113 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         assert!(rec.best_so_far.is_none());
         let after = git.resolve_ref(&branch).unwrap().unwrap();
         assert_eq!(original, after);
+    }
+
+    /// Build inputs and run one iteration with summarization configured via
+    /// the given mutator on `cfg.summarize`.
+    fn run_with_summarize(
+        agent_cmd: &str,
+        mutate: impl FnOnce(&mut crate::config::Summarize),
+    ) -> (TempDir, ExperimentPaths, IterationRecord) {
+        let (tmp, git, paths, branch) = init_test_env();
+        let mut cfg = make_config(
+            agent_cmd,
+            "bash score.sh",
+            FailMode::Invalid,
+            vec![],
+            true, // keep_worktrees so summary artifacts are easy to introspect
+        );
+        mutate(&mut cfg.summarize);
+        let inputs = IterationInputs {
+            cfg: &cfg,
+            paths: &paths,
+            git: &git,
+            branch: &branch,
+            iter: 1,
+            best: None,
+            recent: &[],
+            program_md: "",
+            best_diff: None,
+        };
+        let mut state = init_state();
+        let rec = run_iteration(&inputs, &mut state).unwrap();
+        (tmp, paths, rec)
+    }
+
+    #[test]
+    fn summary_generated_for_non_noop_iteration() {
+        // (a): an enabled, reachable summarize command yields a non-empty
+        // summary on a merged iteration, captured into the record and to
+        // iter-NNNN/summary.md.
+        let (_tmp, paths, rec) = run_with_summarize("echo 3.14 > value.txt", |s| {
+            s.enabled = true;
+            // stdin = "prompt" so we don't need {prompt_file} in the command;
+            // the summarizer just emits a fixed line on stdout.
+            s.stdin = AgentStdin::Prompt;
+            s.command = "echo SUMMARY_MARKER".to_string();
+        });
+        assert_eq!(rec.outcome, Outcome::Merged);
+        assert_eq!(rec.summary, "SUMMARY_MARKER");
+        let summary_md = fs::read_to_string(paths.iter_dir(1).join("summary.md")).unwrap();
+        assert_eq!(summary_md, "SUMMARY_MARKER");
+        // The summary prompt was written outside the worktree.
+        assert!(paths.iter_dir(1).join("summary-prompt.md").exists());
+    }
+
+    #[test]
+    fn summary_skipped_for_noop_iteration() {
+        // (a)/scope: a noop produces no diff, so summarization is skipped even
+        // when enabled.
+        let (_tmp, paths, rec) = run_with_summarize("true", |s| {
+            s.enabled = true;
+            s.stdin = AgentStdin::Prompt;
+            s.command = "echo SHOULD_NOT_RUN".to_string();
+        });
+        assert_eq!(rec.outcome, Outcome::Noop);
+        assert_eq!(rec.summary, "");
+        assert!(!paths.iter_dir(1).join("summary.md").exists());
+        assert!(!paths.iter_dir(1).join("summary-prompt.md").exists());
+    }
+
+    #[test]
+    fn summary_failure_is_best_effort() {
+        // (c): a failing summarize command leaves the outcome unchanged and the
+        // summary empty.
+        let (_tmp, paths, rec) = run_with_summarize("echo 3.14 > value.txt", |s| {
+            s.enabled = true;
+            s.stdin = AgentStdin::Prompt;
+            s.command = "false".to_string();
+        });
+        assert_eq!(rec.outcome, Outcome::Merged, "outcome must be unaffected");
+        assert!(rec.score.is_some());
+        assert_eq!(rec.summary, "");
+        assert!(!paths.iter_dir(1).join("summary.md").exists());
+    }
+
+    #[test]
+    fn summary_timeout_is_best_effort() {
+        // (c): a summarize command that overruns summarize.timeout is killed and
+        // leaves the summary empty without affecting the iteration.
+        let (_tmp, _paths, rec) = run_with_summarize("echo 3.14 > value.txt", |s| {
+            s.enabled = true;
+            s.stdin = AgentStdin::Prompt;
+            s.command = "sleep 30".to_string();
+            s.timeout = Duration::from_secs(1);
+        });
+        assert_eq!(rec.outcome, Outcome::Merged);
+        assert_eq!(rec.summary, "");
+    }
+
+    #[test]
+    fn summary_disabled_leaves_empty() {
+        // (d): with summarize disabled the field is empty and no artifacts
+        // are written.
+        let (_tmp, paths, rec) = run_with_summarize("echo 3.14 > value.txt", |s| {
+            s.enabled = false;
+        });
+        assert_eq!(rec.outcome, Outcome::Merged);
+        assert_eq!(rec.summary, "");
+        assert!(!paths.iter_dir(1).join("summary.md").exists());
+        assert!(!paths.iter_dir(1).join("summary-prompt.md").exists());
     }
 }
