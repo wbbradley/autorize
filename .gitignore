@@ -9,3 +9,6 @@ Cargo.lock.bak
 
 # Per-iteration worktree dirs (not part of the durable log)
 .autorize/*/iter-*/wt
+
+# Central run log (project-root relative, append-only)
+logs/

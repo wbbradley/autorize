@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashSet},
+    fs::File,
     io::{Read, Write},
     os::unix::process::{CommandExt, ExitStatusExt},
     path::Path,
@@ -24,6 +25,51 @@ use crate::error::{Error, Result};
 fn child_pgids() -> &'static Mutex<HashSet<i32>> {
     static PGIDS: OnceLock<Mutex<HashSet<i32>>> = OnceLock::new();
     PGIDS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Central log sink that every child process's stdout/stderr is teed into
+/// (in addition to the per-iter `agent.stdout`/`agent.stderr` capture files),
+/// so `logs/autorize.log` holds the complete picture including subprocess
+/// output. Installed once from `main` via [`set_tee_log`]; left unset in
+/// tests, where teeing is a no-op.
+fn tee_log() -> &'static Mutex<Option<File>> {
+    static TEE: OnceLock<Mutex<Option<File>>> = OnceLock::new();
+    TEE.get_or_init(|| Mutex::new(None))
+}
+
+/// Install the central child-stdio tee target. `file` should be opened in
+/// append mode on `logs/autorize.log`.
+pub fn set_tee_log(file: File) {
+    *tee_log().lock().expect("tee log poisoned") = Some(file);
+}
+
+/// Append `bytes` to the central tee log if one is installed. Best-effort:
+/// a write error never fails the subprocess.
+fn tee(bytes: &[u8]) {
+    if let Ok(mut guard) = tee_log().lock()
+        && let Some(f) = guard.as_mut()
+    {
+        let _ = f.write_all(bytes);
+    }
+}
+
+/// Drain a child pipe to a `String` (as before) while teeing each chunk into
+/// the central log. Reading in chunks rather than `read_to_string` lets the
+/// tee stream output as it arrives.
+fn drain_and_tee<R: Read>(mut r: R) -> String {
+    let mut out = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match r.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                tee(&chunk[..n]);
+                out.extend_from_slice(&chunk[..n]);
+            }
+            Err(_) => break,
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// RAII registration of a child pgid for the duration of a spawn. Dropping
@@ -75,7 +121,7 @@ pub fn install_signal_handler() {
         Ok(s) => s,
         Err(e) => {
             // Non-fatal: the loop still runs, we just lose tidy teardown.
-            eprintln!("autorize: failed to install signal handler: {e}");
+            tracing::warn!("failed to install signal handler: {e}");
             return;
         }
     };
@@ -174,18 +220,10 @@ pub fn run_command_with_budget(
         })
     });
 
-    let mut stdout_pipe = child.stdout.take().expect("stdout was piped");
-    let mut stderr_pipe = child.stderr.take().expect("stderr was piped");
-    let stdout_thread = std::thread::spawn(move || {
-        let mut buf = String::new();
-        let _ = stdout_pipe.read_to_string(&mut buf);
-        buf
-    });
-    let stderr_thread = std::thread::spawn(move || {
-        let mut buf = String::new();
-        let _ = stderr_pipe.read_to_string(&mut buf);
-        buf
-    });
+    let stdout_pipe = child.stdout.take().expect("stdout was piped");
+    let stderr_pipe = child.stderr.take().expect("stderr was piped");
+    let stdout_thread = std::thread::spawn(move || drain_and_tee(stdout_pipe));
+    let stderr_thread = std::thread::spawn(move || drain_and_tee(stderr_pipe));
 
     let start = Instant::now();
     let mut timed_out = false;

@@ -172,6 +172,7 @@ agent — included verbatim at the top of every prompt.
 
 ```
 <repo>/
+  logs/autorize.log        # central append-only run log (narrative + teed child stdio)
   .autorize/<name>/
     config.toml
     program.md
@@ -185,6 +186,9 @@ agent — included verbatim at the top of every prompt.
     iter-0002/
     ...
 ```
+
+`logs/` is created on startup (gitignore it). `RUST_LOG` tunes verbosity
+(default `info`).
 
 The tracking branch `autorize/<name>` records every merged iteration as a
 single commit, so `git log autorize/<name>` is your improvement history and

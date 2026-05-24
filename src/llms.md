@@ -36,8 +36,8 @@ End-to-end workflow:
 3. Edit `.autorize/<name>/program.md` (freeform agent instructions; included
    verbatim at the top of every prompt).
 4. Commit the repo — `autorize run` refuses a dirty tree by default
-   (use `--allow-dirty` to override; the `.autorize/` directory is always
-   ignored for the dirty-tree check).
+   (use `--allow-dirty` to override; the `.autorize/` directory and the
+   `logs/` run log are always ignored for the dirty-tree check).
 5. `autorize run <name>` — drives the loop.
 6. `autorize status <name>` — one-shot summary from another shell.
 7. `autorize resume <name>` — recover after a crash or `Ctrl-C` mid-iter.
@@ -267,6 +267,11 @@ killed iterations.
 
 ```
 <repo>/
+  logs/
+    autorize.log             # central append-only run log (project-root relative):
+                             #   autorize's own narrative (at `info`) plus every
+                             #   subprocess's teed stdout/stderr. Append mode, so a
+                             #   second run extends rather than truncates it.
   .autorize/<name>/
     config.toml              # the schema documented above
     program.md               # freeform agent instructions
@@ -282,6 +287,9 @@ killed iterations.
     iter-0002/
     ...
 ```
+
+`logs/` is created on startup and should be gitignored. Set `RUST_LOG`
+(e.g. `RUST_LOG=debug`) to change verbosity; the default is `info`.
 
 - `state.json` is written via tmp-file + fsync + atomic rename (and best-
   effort directory fsync). A torn write never corrupts the destination.
@@ -337,8 +345,9 @@ Before entering the loop, `autorize run`:
   diagnostics. The kernel releases the lock automatically on process exit,
   so a crash leaves no stale lock to clean up.
 - Verifies the current directory is a git repository.
-- Verifies the working tree is clean (excluding the `.autorize/` directory,
-  which is always allowed to be dirty). Use `--allow-dirty` to bypass.
+- Verifies the working tree is clean (excluding the `.autorize/` directory
+  and the `logs/` run log, which are always allowed to be dirty). Use
+  `--allow-dirty` to bypass.
 - If `state.json` exists, verifies `state.json.base_commit` is reachable
   in the current repo. If it is gone, the run aborts with an error.
 - If `state.json` exists and has `iter_in_progress != null`, the run is

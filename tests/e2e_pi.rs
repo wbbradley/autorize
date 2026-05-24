@@ -257,6 +257,61 @@ fn deny_path_violation_yields_denied_outcome() {
 }
 
 #[test]
+fn central_log_appends_and_tees_child_output() {
+    // Part C: every run writes a project-root `logs/autorize.log` that holds
+    // both autorize's own narrative and the teed child stdout/stderr, opened
+    // in append mode so repeated runs extend rather than truncate it.
+    let tmp = bootstrap();
+    let p = tmp.path();
+
+    // Make the agent emit a unique marker on stdout so we can prove its output
+    // was teed into the central log (not just autorize's own narrative).
+    let cfg_path = p.join(".autorize/pi/config.toml");
+    let cfg = fs::read_to_string(&cfg_path).unwrap();
+    let cfg = cfg.replace(
+        "command = \"bash mock-agent.sh {iter}\"",
+        "command = \"bash mock-agent.sh {iter} && echo TEE_MARKER_7F3A\"",
+    );
+    fs::write(&cfg_path, cfg).unwrap();
+
+    let out = run_autorize(&["run", "pi"], p);
+    assert!(
+        out.status.success(),
+        "autorize run failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let log_path = p.join("logs/autorize.log");
+    assert!(log_path.is_file(), "logs/autorize.log should exist");
+    let log1 = fs::read_to_string(&log_path).unwrap();
+    assert!(
+        log1.contains("TEE_MARKER_7F3A"),
+        "central log missing teed child stdout: {log1}"
+    );
+    assert!(
+        log1.contains("iter 1:"),
+        "central log missing iteration narrative: {log1}"
+    );
+    let len1 = fs::metadata(&log_path).unwrap().len();
+
+    // A second run appends (the loop is already at max_iterations and stops,
+    // but still logs); the file must grow and keep the earlier content.
+    let out2 = run_autorize(&["run", "pi"], p);
+    assert!(out2.status.success(), "second run failed: {out2:?}");
+    let log2 = fs::read_to_string(&log_path).unwrap();
+    let len2 = fs::metadata(&log_path).unwrap().len();
+    assert!(
+        len2 > len1,
+        "log should grow on a second run (append): {len1} -> {len2}"
+    );
+    assert!(
+        log2.contains("TEE_MARKER_7F3A"),
+        "append mode must preserve earlier content"
+    );
+}
+
+#[test]
 fn resume_records_killed_then_continues() {
     let tmp = tempdir().unwrap();
     let p = tmp.path();

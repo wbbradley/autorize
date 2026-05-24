@@ -41,11 +41,11 @@ pub fn run_with_root(args: InitArgs, project_root: PathBuf) -> Result<Config> {
 
     let cfg = Config::from_toml(&config_text)?;
 
-    println!("created experiment {:?} at {}", args.name, root.display());
-    println!("  - {}", paths.config_path().display());
-    println!("  - {}", paths.program_path().display());
-    println!("edit program.md with your agent instructions, then run:");
-    println!("  autorize run {}", args.name);
+    tracing::info!("created experiment {:?} at {}", args.name, root.display());
+    tracing::info!("  - {}", paths.config_path().display());
+    tracing::info!("  - {}", paths.program_path().display());
+    tracing::info!("edit program.md with your agent instructions, then run:");
+    tracing::info!("  autorize run {}", args.name);
 
     Ok(cfg)
 }

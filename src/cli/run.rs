@@ -2,6 +2,7 @@ use std::{env, fs, path::PathBuf};
 
 use chrono::{Local, Utc};
 use regex::Regex;
+use tracing::info;
 
 use crate::{
     config::{Config, Direction},
@@ -66,7 +67,9 @@ pub(crate) fn run_loop(
             "not a git repository (cd into one or `git init`)".to_string(),
         ));
     }
-    if !allow_dirty && !git.is_clean_excluding(&[".autorize/"])? {
+    // `.autorize/` is the harness's own bookkeeping and `logs/` is the central
+    // run log it creates on startup; neither should trip the dirty-tree guard.
+    if !allow_dirty && !git.is_clean_excluding(&[".autorize/", "logs/"])? {
         return Err(Error::Git(
             "working tree has uncommitted changes; pass --allow-dirty to override".to_string(),
         ));
@@ -131,20 +134,20 @@ pub(crate) fn run_loop(
     loop {
         let now = Utc::now();
         if deadline.is_expired(now) {
-            println!("deadline reached at {now}; stopping.");
+            info!("deadline reached at {now}; stopping.");
             break;
         }
         if cfg.iteration.max_iterations > 0
             && state.iterations_completed >= cfg.iteration.max_iterations
         {
-            println!(
+            info!(
                 "reached max_iterations={}; stopping.",
                 cfg.iteration.max_iterations
             );
             break;
         }
         if state.consecutive_noops >= cfg.iteration.max_consecutive_noops {
-            println!(
+            info!(
                 "reached max_consecutive_noops={}; stopping.",
                 cfg.iteration.max_consecutive_noops
             );
@@ -180,7 +183,7 @@ pub(crate) fn run_loop(
             .best_score
             .map(|s| format!("{s:.6}"))
             .unwrap_or_else(|| "(none)".to_string());
-        println!(
+        info!(
             "iter {}: {} score={} best={}",
             rec.iter,
             outcome_label(rec.outcome),
@@ -364,13 +367,14 @@ fn outcome_label(o: Outcome) -> &'static str {
 }
 
 fn print_final_summary(state: &StateSnapshot) {
-    println!("---");
-    println!("experiment   {}", state.experiment);
-    println!("iterations   {}", state.iterations_completed);
-    match (state.best_iter, state.best_score) {
-        (Some(i), Some(s)) => println!("best         iter {i}, score {s:.6}"),
-        _ => println!("best         (none)"),
-    }
+    let best = match (state.best_iter, state.best_score) {
+        (Some(i), Some(s)) => format!("iter {i}, score {s:.6}"),
+        _ => "(none)".to_string(),
+    };
+    info!(
+        "run complete: experiment={} iterations={} best={best}",
+        state.experiment, state.iterations_completed
+    );
 }
 
 #[cfg(test)]
