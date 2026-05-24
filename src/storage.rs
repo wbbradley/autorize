@@ -89,6 +89,7 @@ pub fn append_iteration(path: &Path, rec: &IterationRecord) -> Result<()> {
     f.write_all(line.as_bytes())?;
     f.write_all(b"\n")?;
     f.sync_all()?;
+    tracing::info!("appended record to {}", path.display());
     Ok(())
 }
 
@@ -119,6 +120,7 @@ fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
         f.sync_all()?;
         drop(f);
         fs::rename(&tmp, path)?;
+        tracing::info!("wrote {} (atomic)", path.display());
         if let Some(parent) = path.parent() {
             let _ = File::open(parent).and_then(|d| d.sync_all());
         }

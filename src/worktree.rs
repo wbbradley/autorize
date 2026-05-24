@@ -262,6 +262,11 @@ fn path_str(p: &Path) -> Result<&str> {
 }
 
 fn run_git_raw(args: &[&str], cwd: &Path) -> Result<(std::process::ExitStatus, String, String)> {
+    // Single chokepoint for every git invocation (read-only queries and
+    // mutations alike). Log the argv + cwd, never the captured stdout — a
+    // `git diff`'s output is huge and already saved to `changes.diff`. git
+    // argv never carries `agent.env` values, so this cannot leak secrets.
+    tracing::info!("git {} (cwd={})", args.join(" "), cwd.display());
     let out = Command::new("git").args(args).current_dir(cwd).output()?;
     Ok((
         out.status,

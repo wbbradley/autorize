@@ -119,7 +119,7 @@ and stops at "ready to `autorize run <name>`" — it never starts the loop.
 | `autorize run <name>`    | Run the loop until deadline / cap / noop streak. |
 | `autorize status <name>` | One-shot summary from `state.json` + `iterations.jsonl`. |
 | `autorize resume <name>` | Recover after a crash; any in-progress iter is recorded as `killed` and the loop continues. |
-| `autorize clean <name>`  | Tidy a finished/abandoned experiment: free the tracking branch, drop stale staged indexes, prune dead worktree registrations (`--remove-worktrees` also deletes kept `wt/` checkouts). Leaves the log and records intact. |
+| `autorize clean <name>`  | Tidy a finished/abandoned experiment: detach any worktree still holding the tracking branch checked out (the branch ref is preserved), drop stale staged indexes, prune dead worktree registrations (`--remove-worktrees` also deletes kept `wt/` checkouts). Leaves the log and records intact. |
 | `autorize llms`          | Print an exhaustive agent-targeted markdown reference (config schema, on-disk layout, `IterationRecord`, state machine). |
 
 `autorize run` accepts `--allow-dirty` if you need to start with uncommitted
@@ -189,7 +189,10 @@ agent — included verbatim at the top of every prompt.
 ```
 
 `logs/` is created on startup (gitignore it). `RUST_LOG` tunes verbosity
-(default `info`).
+(default `info`). At `info` the log is a forensic audit trail — every git
+call, subprocess spawn, and filesystem mutation is recorded (dozens of lines
+per iteration; `agent.env` secrets are never logged). Use `RUST_LOG=warn` to
+quiet it (also hides the run narrative).
 
 The tracking branch `autorize/<name>` records every merged iteration as a
 single commit, so `git log autorize/<name>` is your improvement history and

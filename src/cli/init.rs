@@ -33,10 +33,13 @@ pub fn run_with_root(args: InitArgs, project_root: PathBuf) -> Result<Config> {
         });
     }
 
+    tracing::info!("mkdir -p {}", root.display());
     fs::create_dir_all(&root)?;
     let config_text = templates::render_config(&args.name);
     let program_text = templates::render_program(&args.name);
+    tracing::info!("write {}", paths.config_path().display());
     fs::write(paths.config_path(), &config_text)?;
+    tracing::info!("write {}", paths.program_path().display());
     fs::write(paths.program_path(), &program_text)?;
 
     let cfg = Config::from_toml(&config_text)?;

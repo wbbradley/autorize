@@ -37,9 +37,11 @@ pub fn run_iteration(
     let iter_dir = inputs.paths.iter_dir(inputs.iter);
 
     // Ensure the experiment root exists so checkpoint writes can land.
+    tracing::info!("mkdir -p {}", inputs.paths.root().display());
     fs::create_dir_all(inputs.paths.root())?;
 
     checkpoint(state, inputs, CurrentStep::AllocateIter)?;
+    tracing::info!("mkdir -p {}", iter_dir.display());
     fs::create_dir_all(&iter_dir)?;
 
     checkpoint(state, inputs, CurrentStep::CreateWorktree)?;
@@ -72,6 +74,7 @@ pub fn run_iteration(
         direction: inputs.cfg.objective.direction,
     });
     let prompt_path = iter_dir.join("prompt.md");
+    tracing::info!("write {}", prompt_path.display());
     fs::write(&prompt_path, &prompt_text)?;
 
     checkpoint(state, inputs, CurrentStep::InvokeAgent)?;
@@ -85,7 +88,9 @@ pub fn run_iteration(
         env: &inputs.cfg.agent.env,
         stdin: inputs.cfg.agent.stdin,
     })?;
+    tracing::info!("write {}", iter_dir.join("agent.stdout").display());
     fs::write(iter_dir.join("agent.stdout"), &agent_out.stdout)?;
+    tracing::info!("write {}", iter_dir.join("agent.stderr").display());
     fs::write(iter_dir.join("agent.stderr"), &agent_out.stderr)?;
 
     checkpoint(state, inputs, CurrentStep::CaptureDiff)?;
@@ -94,6 +99,7 @@ pub fn run_iteration(
     // needed both for the deny-path scan and the saved changes.diff.
     inputs.git.stage_all_in(&wt)?;
     let diff_text = inputs.git.diff_against(&wt, inputs.branch)?;
+    tracing::info!("write {}", iter_dir.join("changes.diff").display());
     fs::write(iter_dir.join("changes.diff"), &diff_text)?;
     let changed = inputs.git.diff_paths_against(&wt, inputs.branch)?;
     // Unwind the capture-time staging so a kept (non-merged) worktree reads as

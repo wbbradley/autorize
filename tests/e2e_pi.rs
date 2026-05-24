@@ -59,6 +59,12 @@ fn git_init_commit(dir: &Path) {
     git(&["init", "-q", "-b", "main"], dir);
     git(&["config", "user.email", "test@example.com"], dir);
     git(&["config", "user.name", "Test"], dir);
+    // Make the throwaway repo hermetic: ignore the developer's global
+    // `core.excludesFile`. Without this, a global ignore of `.autorize`
+    // (common on machines that develop autorize itself) would hide the
+    // agent's `.autorize/**` writes from autorize's internal `git add -A`,
+    // turning the deny-path test's expected `denied` outcome into a `noop`.
+    git(&["config", "core.excludesFile", "/dev/null"], dir);
     git(&["add", "."], dir);
     git(&["commit", "-qm", "init"], dir);
 }
@@ -293,6 +299,17 @@ fn central_log_appends_and_tees_child_output() {
         log1.contains("iter 1:"),
         "central log missing iteration narrative: {log1}"
     );
+    // The central log doubles as a forensic audit trail: every git invocation
+    // and every filesystem mutation is logged at `info`. Assert a
+    // representative git op (worktree creation) and fs op (prompt.md write).
+    assert!(
+        log1.contains("git worktree add"),
+        "central log missing representative git op: {log1}"
+    );
+    assert!(
+        log1.contains("write") && log1.contains("prompt.md"),
+        "central log missing representative fs op: {log1}"
+    );
     let len1 = fs::metadata(&log_path).unwrap().len();
 
     // A second run appends (the loop is already at max_iterations and stops,
@@ -308,6 +325,47 @@ fn central_log_appends_and_tees_child_output() {
     assert!(
         log2.contains("TEE_MARKER_7F3A"),
         "append mode must preserve earlier content"
+    );
+}
+
+#[test]
+fn secret_env_value_never_logged() {
+    // `agent.env` values (e.g. ANTHROPIC_API_KEY) must never reach the central
+    // log. Inject a sentinel env value, run, and assert it appears nowhere in
+    // logs/autorize.log. The mock agent never echoes the var, so its only path
+    // into the log would be a logged env map — which autorize must not log.
+    const SENTINEL: &str = "s3cr3t-do-not-log-9Z";
+
+    let tmp = bootstrap();
+    let p = tmp.path();
+
+    // config.toml lives under .autorize/, which the dirty-tree check ignores,
+    // so editing it post-commit is fine.
+    let cfg_path = p.join(".autorize/pi/config.toml");
+    let cfg = fs::read_to_string(&cfg_path).unwrap();
+    let cfg = cfg.replace(
+        "[agent.env]",
+        &format!("[agent.env]\nAUTORIZE_SECRET_SENTINEL = \"{SENTINEL}\""),
+    );
+    fs::write(&cfg_path, cfg).unwrap();
+
+    let out = run_autorize(&["run", "pi"], p);
+    assert!(
+        out.status.success(),
+        "autorize run failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let log = fs::read_to_string(p.join("logs/autorize.log")).unwrap();
+    assert!(
+        !log.contains(SENTINEL),
+        "secret env value leaked into central log: {log}"
+    );
+    // Sanity: also absent from autorize's own stderr narrative.
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains(SENTINEL),
+        "secret env value leaked into stderr"
     );
 }
 

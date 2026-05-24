@@ -13,12 +13,14 @@ use crate::{
 
 #[derive(clap::Args, Debug)]
 /// Tidy a finished or abandoned experiment without destroying its historical
-/// record. Frees the `autorize/<name>` tracking branch if a stale worktree
-/// still holds it (pre-v0.2.4 residue), clears any leftover `git add -A`
-/// index on kept iteration worktrees, and prunes registrations for `wt/`
-/// directories that no longer exist. `iterations.jsonl` and `state.json` are
-/// never touched; kept worktree checkouts and per-iter artifacts are
-/// preserved unless `--remove-worktrees` is given.
+/// record. Detaches a stale worktree that still has the `autorize/<name>`
+/// branch checked out (pre-v0.2.4 residue) so the branch becomes checkout-able
+/// again — the branch ref itself is never created, moved, or deleted. Also
+/// clears any leftover `git add -A` index on kept iteration worktrees and
+/// prunes registrations for `wt/` directories that no longer exist.
+/// `iterations.jsonl` and `state.json` are never touched; kept worktree
+/// checkouts and per-iter artifacts are preserved unless `--remove-worktrees`
+/// is given.
 pub struct CleanArgs {
     /// Experiment name (must exist under `.autorize/<name>/`).
     pub name: String,
@@ -56,7 +58,6 @@ pub(crate) fn run_with_root(args: CleanArgs, project_root: PathBuf) -> Result<()
     let exp_root = canonical(&paths.root());
     let main_root = canonical(&project_root);
 
-    let mut freed_branch = false;
     let mut unstaged = 0u32;
     let mut removed = 0u32;
 
@@ -74,11 +75,17 @@ pub(crate) fn run_with_root(args: CleanArgs, project_root: PathBuf) -> Result<()
             continue;
         }
 
-        // Free the tracking branch if a non-main worktree still holds it.
+        // Detach a non-main worktree that still has the tracking branch
+        // checked out. This only frees the *checkout* so the branch becomes
+        // checkout-able again; the branch ref itself is never created, moved,
+        // or deleted by `clean`.
         let is_main = main_root.as_ref().is_some_and(|m| &wt_canon == m);
         if wt.branch.as_deref() == Some(branch.as_str()) && !is_main {
             git.detach_worktree(&wt.path)?;
-            freed_branch = true;
+            info!(
+                "detached worktree {} that had branch {branch} checked out — branch preserved, now checkout-able",
+                wt.path.display()
+            );
         }
 
         // Clear any stale `git add -A` index on a kept iteration worktree.
@@ -90,9 +97,6 @@ pub(crate) fn run_with_root(args: CleanArgs, project_root: PathBuf) -> Result<()
 
     git.worktree_prune()?;
 
-    if freed_branch {
-        info!("freed tracking branch {branch} from a worktree that held it");
-    }
     if removed > 0 {
         info!(
             "removed {removed} worktree checkout(s) under .autorize/{}",
@@ -105,8 +109,7 @@ pub(crate) fn run_with_root(args: CleanArgs, project_root: PathBuf) -> Result<()
         );
     }
     info!(
-        "cleaned experiment {:?}: branch and registrations tidied; log and records preserved",
-        args.name
+        "done: branch {branch} preserved; worktree checkouts and stale registrations cleaned; iterations.jsonl and state.json untouched"
     );
     Ok(())
 }

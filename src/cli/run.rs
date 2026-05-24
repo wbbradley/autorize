@@ -103,6 +103,7 @@ pub(crate) fn run_loop(
                 iterations_completed: 0,
                 consecutive_noops: 0,
             };
+            info!("mkdir -p {}", paths.root().display());
             fs::create_dir_all(paths.root())?;
             storage::write_state(&paths.state_path(), &state)?;
             state

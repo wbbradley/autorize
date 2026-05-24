@@ -546,3 +546,41 @@ Docs updated: `README.md` and `src/llms.md` gained the `clean` subcommand and th
 clean. Real-repo verification of `autorize clean runs-perf` on
 `~/src/ls-py-run-handler` (acceptance c/d) left to the user, since it mutates a
 separate repo.
+
+## Clearer `clean` wording + full operation logging audit trail (2026-05-24)
+
+Two related observability/usability fixes.
+
+**Part 1 — reworded `autorize clean` output.** The old messages
+(`freed tracking branch …`, `branch and registrations tidied`) implied the
+tracking branch ref had been modified, when `clean` only ever *detaches* a stale
+worktree that had the branch checked out — the ref is never created/moved/deleted.
+Reworded to explicitly say the branch is preserved and name the detached worktree
+(`detached worktree {path} that had branch {branch} checked out — branch
+preserved, now checkout-able`; final line `done: branch {branch} preserved; …
+iterations.jsonl and state.json untouched`). The `CleanArgs` doc comment,
+`README.md`, and `src/llms.md` `clean` descriptions got the same correction. A pass
+over `run.rs`/`init.rs` `tracing` messages found nothing else misleading.
+
+**Part 2 — `logs/autorize.log` is now a forensic audit trail.** At the default
+`info` level autorize logs every git invocation (read-only and mutating alike) via
+a single `tracing::info!` at the `run_git_raw` chokepoint (argv + cwd, never the
+captured stdout); every subprocess spawn in `run_command_with_budget` (command +
+workdir before, exit/timeout after); and every filesystem mutation inline
+(`create_dir_all`, `fs::write` of prompt.md/agent.stdout/agent.stderr/changes.diff,
+config.toml/program.md, the atomic state.json write and iterations.jsonl append).
+Secrets stay out: only command strings and paths are logged, never the expanded
+`agent.env` map. Documented the verbosity (and the `RUST_LOG=warn` escape hatch) in
+`README.md` and `src/llms.md`.
+
+**Tests.** Extended `central_log_appends_and_tees_child_output` to assert the log
+contains a representative git op (`git worktree add`) and fs op (`prompt.md` write);
+added `secret_env_value_never_logged` (an `agent.env` sentinel must not appear in
+the log). While verifying, found and fixed a pre-existing environment-specific
+failure: `deny_path_violation_yields_denied_outcome` went `noop` instead of
+`denied` because the dev machine's global `core.excludesFile` (`~/.gitignore`)
+ignores `.autorize`, hiding the agent's `.autorize/**` writes from autorize's
+internal `git add -A`. Made the e2e repos hermetic (`git config core.excludesFile
+/dev/null`) and filed the underlying product gap (deny enforcement is blind to
+gitignored paths) as a new PLAN item. All 155 unit + 6 e2e + 1 signal tests pass;
+`chk` clean.

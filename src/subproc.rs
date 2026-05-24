@@ -182,6 +182,10 @@ pub fn run_command_with_budget(
     extra_env: &BTreeMap<String, String>,
     stdin_payload: Option<Vec<u8>>,
 ) -> Result<CommandOutput> {
+    // Log the command + workdir, never `extra_env`: it holds the expanded
+    // `agent.env` map (e.g. ANTHROPIC_API_KEY), which must stay out of the log.
+    tracing::info!("subprocess: {command} (workdir={})", workdir.display());
+
     let mut cmd = Command::new("bash");
     cmd.arg("-lc").arg(command).current_dir(workdir);
     cmd.stdin(if stdin_payload.is_some() {
@@ -255,6 +259,15 @@ pub fn run_command_with_budget(
     if let Some(t) = stdin_thread {
         let _ = t.join();
     }
+
+    let exit_label = status
+        .code()
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| "killed-by-signal".to_string());
+    tracing::info!(
+        "subprocess finished: exit={exit_label} timed_out={timed_out} (workdir={})",
+        workdir.display()
+    );
 
     Ok(CommandOutput {
         exit_code: status.code(),
