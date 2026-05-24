@@ -625,3 +625,32 @@ now that a crash doesn't consume a budget slot. Documented `--fresh` in
 `run_iterations_completed` schema row, and the `killed`-counter note). 162 unit
 + 6 e2e + 1 signal tests pass; `chk` clean. End-to-end smoke test confirmed:
 run → no-op re-run → `--fresh` does N more iterations building on the prior best.
+
+## A1 — Deterministic per-iteration outcome reason (`notes`) (2026-05-24)
+
+First of three sub-tasks split out from the "Iteration memory" feature. The
+`IterationRecord.notes` field was always `String::new()` for normal iterations
+(only crash-recovery paths set it); the agent saw `iter | outcome | score` with
+no hint as to *why* an attempt was kept or thrown away.
+
+**Behavior.** `run_iteration` now records a short harness-derived reason on every
+record-producing branch: `"no changes produced"` (noop), `"denied: touched
+<paths>"` (denied), `"invalid: <detail>"` (invalid), `"improved: <score> from
+<prev best>"` / `"first valid score: <score>"` (merged), and `"regressed: <score>
+vs best <best> (<direction>)"` (discarded). Scores render with `{:.6}`. The
+`ScoreFailure`→string match was extracted from `apply_fail_mode`'s `Abort` arm
+into a shared `scoring::describe_failure`, reused for the `invalid` note so both
+phrase failures identically. Crash-recovery notes ("resumed after crash",
+"reconciled from branch tip after crash") are unchanged.
+
+**Surfacing.** `prompt::push_history_table` gained a `reason` column carrying
+`notes`, so each recent iteration in the prompt now explains its outcome.
+`autorize status` prints a `last reason` line when the latest record has notes.
+
+**Tests/docs.** Extended the five `iteration.rs` outcome tests to assert the note
+grammar; updated the `prompt_with_history_table` + `prompt_snapshot` tests for
+the new column; added `scoring::describe_failure` and two `status` tests
+(`status_prints_last_reason`, `status_omits_reason_when_notes_empty`). Updated
+`src/llms.md` §11 (the `notes` row + annotated sample line + status sample) and
+`src/templates/program.md.tmpl`. 165 unit + 6 e2e + 1 signal tests pass; `chk`
+clean.

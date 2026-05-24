@@ -3,8 +3,9 @@
 Write your agent instructions here. This file is passed to the agent on every
 iteration as the freeform "program" — the steady, project-specific guidance
 about *what to improve and how*. The harness appends a compact context block
-(last 10 iterations, best diff so far, current iteration number and budget)
-at run time.
+(last 10 iterations — each annotated with a short reason for its outcome, e.g.
+`regressed: 3.15 vs best 3.14 (min)` — the best diff so far, and the current
+iteration number and budget) at run time.
 
 Tips:
 - Be specific about what counts as an improvement. The objective command

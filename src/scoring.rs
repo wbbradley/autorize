@@ -93,16 +93,26 @@ pub fn apply_fail_mode(out: &ScoreOutput, obj: &Objective) -> ScoreDecision {
             Direction::Max => ScoreDecision::Use(f64::MIN),
         },
         FailMode::Abort => {
-            let reason = match &out.failure {
-                Some(ScoreFailure::Spawn(s)) => format!("spawn: {s}"),
-                Some(ScoreFailure::Exit(c)) => format!("exit code {c}"),
-                Some(ScoreFailure::Signal) => "killed by signal".to_string(),
-                Some(ScoreFailure::Timeout) => "timed out".to_string(),
-                Some(ScoreFailure::Parse(s)) => format!("parse: {s}"),
-                None => "no score".to_string(),
-            };
+            let reason = out
+                .failure
+                .as_ref()
+                .map(describe_failure)
+                .unwrap_or_else(|| "no score".to_string());
             ScoreDecision::Abort(reason)
         }
+    }
+}
+
+/// Render a `ScoreFailure` as a short human-readable reason. Shared by
+/// `apply_fail_mode`'s `Abort` arm and the `Invalid`-outcome `notes` the
+/// iteration state machine records, so both phrase failures identically.
+pub fn describe_failure(f: &ScoreFailure) -> String {
+    match f {
+        ScoreFailure::Spawn(s) => format!("spawn: {s}"),
+        ScoreFailure::Exit(c) => format!("exit code {c}"),
+        ScoreFailure::Signal => "killed by signal".to_string(),
+        ScoreFailure::Timeout => "timed out".to_string(),
+        ScoreFailure::Parse(s) => format!("parse: {s}"),
     }
 }
 
@@ -449,6 +459,21 @@ mod tests {
             }
             _ => panic!("expected Use"),
         }
+    }
+
+    #[test]
+    fn describe_failure_renders_each_variant() {
+        assert_eq!(describe_failure(&ScoreFailure::Exit(3)), "exit code 3");
+        assert_eq!(describe_failure(&ScoreFailure::Timeout), "timed out");
+        assert_eq!(describe_failure(&ScoreFailure::Signal), "killed by signal");
+        assert_eq!(
+            describe_failure(&ScoreFailure::Spawn("boom".into())),
+            "spawn: boom"
+        );
+        assert_eq!(
+            describe_failure(&ScoreFailure::Parse("nope".into())),
+            "parse: nope"
+        );
     }
 
     #[test]

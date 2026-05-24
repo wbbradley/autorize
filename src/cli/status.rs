@@ -42,10 +42,8 @@ fn format_summary(state: &StateSnapshot, records: &[IterationRecord]) -> String 
     let now = Utc::now();
     let elapsed = (now - state.started_at).to_std().unwrap_or_default();
     let remaining = Deadline(state.deadline).remaining(now);
-    let last_outcome = records
-        .last()
-        .map(|r| outcome_label(r.outcome))
-        .unwrap_or("(none)");
+    let last = records.last();
+    let last_outcome = last.map(|r| outcome_label(r.outcome)).unwrap_or("(none)");
     s.push_str(&format!("experiment   {}\n", state.experiment));
     s.push_str(&format!("branch       {}\n", state.branch));
     s.push_str(&format!("base_commit  {}\n", state.base_commit));
@@ -55,6 +53,11 @@ fn format_summary(state: &StateSnapshot, records: &[IterationRecord]) -> String 
     ));
     s.push_str(&format!("noop streak  {}\n", state.consecutive_noops));
     s.push_str(&format!("last outcome {last_outcome}\n"));
+    if let Some(r) = last
+        && !r.notes.is_empty()
+    {
+        s.push_str(&format!("last reason   {}\n", r.notes));
+    }
     match (state.best_iter, state.best_score) {
         (Some(i), Some(sc)) => s.push_str(&format!("best         iter {i}, score {sc:.6}\n")),
         _ => s.push_str("best         (none)\n"),
@@ -156,6 +159,28 @@ mod tests {
             "got: {out}"
         );
         assert!(out.contains("last outcome merged"), "got: {out}");
+    }
+
+    #[test]
+    fn status_prints_last_reason() {
+        let mut state = sample_state();
+        state.best_iter = Some(2);
+        state.best_score = Some(3.15);
+        let mut last = sample_record(2, Outcome::Discarded);
+        last.notes = "regressed: 3.150000 vs best 3.140000 (min)".to_string();
+        let out = format_summary(&state, &[last]);
+        assert!(
+            out.contains("last reason   regressed: 3.150000 vs best 3.140000 (min)"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn status_omits_reason_when_notes_empty() {
+        let state = sample_state();
+        // sample_record has empty notes.
+        let out = format_summary(&state, &[sample_record(1, Outcome::Merged)]);
+        assert!(!out.contains("last reason"), "got: {out}");
     }
 
     #[test]

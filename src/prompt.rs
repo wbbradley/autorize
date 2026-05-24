@@ -106,15 +106,16 @@ fn push_path_list(s: &mut String, paths: &[String]) {
 }
 
 fn push_history_table(s: &mut String, recent: &[IterationRecord]) {
-    s.push_str("| iter | outcome   | score      |\n");
-    s.push_str("|------|-----------|------------|\n");
+    s.push_str("| iter | outcome   | score      | reason |\n");
+    s.push_str("|------|-----------|------------|--------|\n");
     for r in recent {
         let _ = writeln!(
             s,
-            "| {:>4} | {:<9} | {:>10} |",
+            "| {:>4} | {:<9} | {:>10} | {} |",
             r.iter,
             outcome_label(r.outcome),
             format_score_cell(r.score),
+            r.notes,
         );
     }
 }
@@ -161,7 +162,7 @@ mod tests {
 
     use super::*;
 
-    fn rec(iter: u64, outcome: Outcome, score: Option<f64>) -> IterationRecord {
+    fn rec(iter: u64, outcome: Outcome, score: Option<f64>, notes: &str) -> IterationRecord {
         IterationRecord {
             iter,
             started_at: Utc.with_ymd_and_hms(2026, 5, 20, 8, 0, 0).unwrap(),
@@ -172,7 +173,7 @@ mod tests {
             agent_exit: Some(0),
             agent_killed_by_budget: false,
             diff_lines: 1,
-            notes: String::new(),
+            notes: notes.to_string(),
         }
     }
 
@@ -240,9 +241,19 @@ mod tests {
     fn prompt_with_history_table() {
         let b = Boundaries::default();
         let hist = vec![
-            rec(7, Outcome::Merged, Some(3.14210)),
-            rec(6, Outcome::Discarded, Some(3.15000)),
-            rec(5, Outcome::Noop, None),
+            rec(
+                7,
+                Outcome::Merged,
+                Some(3.14210),
+                "improved: 3.14210 from 3.15000",
+            ),
+            rec(
+                6,
+                Outcome::Discarded,
+                Some(3.15000),
+                "regressed: 3.15000 vs best 3.14210 (min)",
+            ),
+            rec(5, Outcome::Noop, None, "no changes produced"),
         ];
         let ctx = PromptContext {
             program_md: "p",
@@ -255,23 +266,25 @@ mod tests {
         };
         let p = build_prompt(&ctx);
         assert!(
-            p.contains("| iter | outcome   | score      |"),
+            p.contains("| iter | outcome   | score      | reason |"),
             "header missing: {p}"
         );
         assert!(
-            p.contains("|------|-----------|------------|"),
+            p.contains("|------|-----------|------------|--------|"),
             "separator missing: {p}"
         );
         assert!(
-            p.contains("|    7 | merged    |    3.14210 |"),
+            p.contains("|    7 | merged    |    3.14210 | improved: 3.14210 from 3.15000 |"),
             "row 7 missing: {p}"
         );
         assert!(
-            p.contains("|    6 | discarded |    3.15000 |"),
+            p.contains(
+                "|    6 | discarded |    3.15000 | regressed: 3.15000 vs best 3.14210 (min) |"
+            ),
             "row 6 missing: {p}"
         );
         assert!(
-            p.contains("|    5 | noop      |          \u{2014} |"),
+            p.contains("|    5 | noop      |          \u{2014} | no changes produced |"),
             "row 5 missing: {p}"
         );
     }
@@ -308,8 +321,18 @@ mod tests {
     fn prompt_snapshot() {
         let b = full_boundaries();
         let hist = vec![
-            rec(7, Outcome::Merged, Some(3.14210)),
-            rec(6, Outcome::Discarded, Some(3.15000)),
+            rec(
+                7,
+                Outcome::Merged,
+                Some(3.14210),
+                "improved: 3.14210 from 3.15000",
+            ),
+            rec(
+                6,
+                Outcome::Discarded,
+                Some(3.15000),
+                "regressed: 3.15000 vs best 3.14210 (min)",
+            ),
         ];
         let diff = "diff --git a/value.txt b/value.txt\n--- a/value.txt\n+++ b/value.txt\n@@ -1 +1 @@\n-3.10\n+3.14\n";
         let best = BestSnapshot {
@@ -346,10 +369,10 @@ You MUST NOT modify these paths (ENFORCED \u{2014} touching them discards the it
 
 ## Recent iterations
 
-| iter | outcome   | score      |
-|------|-----------|------------|
-|    7 | merged    |    3.14210 |
-|    6 | discarded |    3.15000 |
+| iter | outcome   | score      | reason |
+|------|-----------|------------|--------|
+|    7 | merged    |    3.14210 | improved: 3.14210 from 3.15000 |
+|    6 | discarded |    3.15000 | regressed: 3.15000 vs best 3.14210 (min) |
 
 ## Best iteration so far
 

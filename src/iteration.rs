@@ -111,14 +111,19 @@ pub fn run_iteration(
     let diff_lines = diff_text.lines().count() as u64;
 
     let outcome: Outcome;
+    // Harness-derived reason for this outcome, surfaced to the next iteration's
+    // prompt and to `autorize status`. Set on every record-producing branch.
+    let notes: String;
     let mut final_score: Option<f64> = None;
     let mut new_best_score: Option<f64> = inputs.best.map(|(s, _)| s);
     let mut new_best_iter: Option<u64> = inputs.best.map(|(_, i)| i);
 
     if changed.is_empty() {
         outcome = Outcome::Noop;
+        notes = "no changes produced".to_string();
     } else if !denied.is_empty() {
         outcome = Outcome::Denied;
+        notes = format!("denied: touched {}", denied.join(", "));
     } else {
         checkpoint(state, inputs, CurrentStep::RunTeardown)?;
         if !inputs.cfg.teardown.command.trim().is_empty() {
@@ -142,6 +147,13 @@ pub fn run_iteration(
             }
             ScoreDecision::Discard => {
                 outcome = Outcome::Invalid;
+                notes = format!(
+                    "invalid: {}",
+                    so.failure
+                        .as_ref()
+                        .map(scoring::describe_failure)
+                        .unwrap_or_else(|| "no score".to_string())
+                );
             }
             ScoreDecision::Use(s) => {
                 final_score = Some(s);
@@ -160,10 +172,22 @@ pub fn run_iteration(
                         .commit_all_in(&wt, &format!("autorize iter {}: score {s}", inputs.iter))?;
                     inputs.git.update_branch_ref(inputs.branch, &sha)?;
                     outcome = Outcome::Merged;
+                    notes = match inputs.best {
+                        Some((b, _)) => format!("improved: {} from {}", fmt_score(s), fmt_score(b)),
+                        None => format!("first valid score: {}", fmt_score(s)),
+                    };
                     new_best_score = Some(s);
                     new_best_iter = Some(inputs.iter);
                 } else {
                     outcome = Outcome::Discarded;
+                    // `improved` was false, so a prior best exists.
+                    let best_b = inputs.best.map(|(b, _)| b).unwrap_or(s);
+                    notes = format!(
+                        "regressed: {} vs best {} ({})",
+                        fmt_score(s),
+                        fmt_score(best_b),
+                        dir_label(inputs.cfg.objective.direction),
+                    );
                 }
             }
         }
@@ -185,7 +209,7 @@ pub fn run_iteration(
         agent_exit: agent_out.exit_code,
         agent_killed_by_budget: agent_out.killed_by_budget,
         diff_lines,
-        notes: String::new(),
+        notes,
     };
     storage::append_iteration(&inputs.paths.iterations_log(), &record)?;
 
@@ -215,6 +239,18 @@ fn checkpoint(
     state.iter_in_progress = Some(inputs.iter);
     state.current_step = step;
     storage::write_state(&inputs.paths.state_path(), state)
+}
+
+/// Compact score rendering for the human-readable `notes` reason.
+fn fmt_score(v: f64) -> String {
+    format!("{v:.6}")
+}
+
+fn dir_label(d: Direction) -> &'static str {
+    match d {
+        Direction::Min => "min",
+        Direction::Max => "max",
+    }
 }
 
 #[cfg(test)]
@@ -383,6 +419,12 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         let s = rec.score.expect("score should be set on Merged");
         assert!(s < 0.01, "score {s} too far from pi");
         assert_eq!(rec.best_so_far, Some(s));
+        // best was None, so this is the first valid score.
+        assert!(
+            rec.notes.starts_with("first valid score"),
+            "notes: {:?}",
+            rec.notes
+        );
 
         assert!(paths.state_path().exists());
         assert_eq!(state.current_step, CurrentStep::Idle);
@@ -421,6 +463,7 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         let rec = run_iteration(&inputs, &mut state).unwrap();
 
         assert_eq!(rec.outcome, Outcome::Noop);
+        assert_eq!(rec.notes, "no changes produced");
         assert!(rec.score.is_none());
         assert!(rec.best_so_far.is_none());
         assert_eq!(state.consecutive_noops, 1);
@@ -458,6 +501,11 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         let rec = run_iteration(&inputs, &mut state).unwrap();
 
         assert_eq!(rec.outcome, Outcome::Denied);
+        assert!(
+            rec.notes.starts_with("denied: touched") && rec.notes.contains("forbidden"),
+            "notes: {:?}",
+            rec.notes
+        );
         assert!(rec.score.is_none());
         let after = git.resolve_ref(&branch).unwrap().unwrap();
         assert_eq!(original, after, "denied iteration must not advance branch");
@@ -493,6 +541,11 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         let rec = run_iteration(&inputs, &mut state).unwrap();
 
         assert_eq!(rec.outcome, Outcome::Discarded);
+        assert!(
+            rec.notes.starts_with("regressed:") && rec.notes.contains("(min)"),
+            "notes: {:?}",
+            rec.notes
+        );
         assert!(rec.score.is_some());
         // Score for value=2.0 is ~1.1416, worse than the pre-seeded 0.001.
         let s = rec.score.unwrap();
@@ -615,6 +668,11 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         let rec = run_iteration(&inputs, &mut state).unwrap();
 
         assert_eq!(rec.outcome, Outcome::Invalid);
+        assert!(
+            rec.notes.starts_with("invalid:") && rec.notes.contains("exit code 1"),
+            "notes: {:?}",
+            rec.notes
+        );
         assert!(rec.score.is_none());
         assert!(rec.best_so_far.is_none());
         let after = git.resolve_ref(&branch).unwrap().unwrap();

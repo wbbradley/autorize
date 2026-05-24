@@ -325,7 +325,7 @@ Each line in `iterations.jsonl` is one `IterationRecord` JSON object:
 | `agent_exit`             | integer or null       | Exit code of the agent process. `null` when killed by signal or unable to spawn.   |
 | `agent_killed_by_budget` | bool                  | `true` if the wall-clock budget killed the agent process group.                    |
 | `diff_lines`             | integer (u64)         | Line count of `iter-NNNN/changes.diff`.                                            |
-| `notes`                  | string                | Free-form, set by the harness in special cases (e.g. `"resumed after crash"`).     |
+| `notes`                  | string                | Harness-derived reason for the outcome. Normal iterations are now annotated: `"improved: <score> from <prev best>"` / `"first valid score: <score>"` (merged), `"regressed: <score> vs best <best> (<direction>)"` (discarded), `"denied: touched <paths>"` (denied), `"invalid: <detail>"` (invalid), `"no changes produced"` (noop). Recovery records still use it (`"resumed after crash"`, `"reconciled from branch tip after crash"`). Shown in the next iteration's recent-iterations table and in `autorize status`. |
 
 `state.json` is a single `StateSnapshot` JSON object:
 
@@ -480,7 +480,7 @@ best         iter 6, score 0.023818
   "agent_exit": 0,
   "agent_killed_by_budget": false,
   "diff_lines": 4,
-  "notes": ""
+  "notes": "first valid score: 0.099201"
 }
 ```
 
@@ -488,6 +488,10 @@ best         iter 6, score 0.023818
 - `best_so_far` equals `score` because this is the first record.
 - `agent_killed_by_budget: false` means the agent finished inside
   `iteration.budget`.
+- `notes` carries the harness's reason for the outcome (here, the first valid
+  score with no prior best to beat). Later iterations read like
+  `"improved: 0.069441 from 0.099201"` or
+  `"regressed: 0.534008 vs best 0.048608 (min)"`.
 
 ### `autorize status pi` (sample output)
 
@@ -498,6 +502,7 @@ base_commit  abc1234deadbeef...
 iterations   6
 noop streak  0
 last outcome merged
+last reason   improved: 0.023818 from 0.034025
 best         iter 6, score 0.023818
 elapsed      1s
 remaining    4m 58s
