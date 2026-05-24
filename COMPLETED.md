@@ -506,3 +506,43 @@ Body is 142 lines (cap was 150). All 146 unit + 4 e2e tests still pass;
 no Rust changes. Known follow-up: if the three-batch `AskUserQuestion`
 interview feels stilted in real use, a v2 iteration can collapse some
 choices to sensible defaults with override-on-request.
+
+## Clean end-of-run repo state: capture unstaging, `autorize clean`, central logging (2026-05-23)
+
+Three independent fixes to how a finished run leaves the repo, shipped as three
+semantic commits.
+
+**Part A — non-mutating diff capture.** `CaptureDiff` still runs `git add -A`
+(`stage_all_in`) so the diff/deny scan sees untracked files, but now immediately
+unwinds it with `git reset -q` (new `Git::unstage_all_in`). Kept non-merged
+worktrees (discarded/invalid/noop/killed) therefore read as ordinary *unstaged*
+dirty checkouts instead of carrying a stray fully-staged index. Safe because the
+merge path (`commit_all_in`) re-stages independently, so merged commits still
+contain the full agent diff (covered by new iteration.rs tests
+`discarded_kept_worktree_has_clean_index` and `merged_commit_contains_full_agent_diff`).
+
+**Part B — `autorize clean <name>`.** New `src/cli/clean.rs` wired into the clap
+dispatch. Frees the `autorize/<name>` tracking branch when a non-main worktree
+still holds it (`Git::detach_worktree` = `git checkout --detach`, pre-v0.2.4
+residue), clears stale `git add -A` indexes on kept iteration worktrees, and
+prunes registrations for vanished `wt/` dirs (`Git::worktree_prune`).
+`--remove-worktrees` additionally deletes kept `wt/` checkouts; `iterations.jsonl`
+and `state.json` are never touched. Five synthetic-repo tests cover branch
+freeing, unstaging, pruning, `--remove-worktrees`, and the missing-experiment error.
+
+**Part C — central logging + child-stdio tee.** Added `tracing-appender`. `main`
+now layers an appending file sink over project-root `logs/autorize.log` alongside
+the stderr layer, defaulting to `info` so the run narrative is visible. Every
+user-facing `println!`/`eprintln!` in `run.rs`, `init.rs`, and `subproc.rs` became
+a `tracing` macro (status/llms keep `print!` as stdout report emitters). Each child
+process's stdout/stderr is teed into the central log (`subproc::set_tee_log` + a
+chunked `drain_and_tee`) on top of the per-iter capture files. `logs/` is excluded
+from the dirty-tree pre-flight (autorize creates it on startup) and gitignored.
+New e2e test `central_log_appends_and_tees_child_output` proves the log exists,
+contains narrative + a teed child marker, and is append (grows across runs).
+
+Docs updated: `README.md` and `src/llms.md` gained the `clean` subcommand and the
+`logs/autorize.log` layout entry. All 155 unit + 5 e2e + 1 signal tests pass; `chk`
+clean. Real-repo verification of `autorize clean runs-perf` on
+`~/src/ls-py-run-handler` (acceptance c/d) left to the user, since it mutates a
+separate repo.
