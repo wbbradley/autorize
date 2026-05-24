@@ -178,6 +178,17 @@ impl Git {
         Ok(())
     }
 
+    /// Mixed reset of the index back to HEAD without touching the working
+    /// tree, undoing a prior [`stage_all_in`]. This leaves a non-merged
+    /// worktree reading as an ordinary *unstaged* dirty checkout rather than
+    /// carrying a stray `git add -A` index. It is safe to call on the accept
+    /// path too: [`commit_all_in`](Self::commit_all_in) re-stages with its own
+    /// `git add -A`, so committed content is unaffected.
+    pub fn unstage_all_in(&self, wt: &Path) -> Result<()> {
+        run_git(&["reset", "-q"], wt)?;
+        Ok(())
+    }
+
     pub fn diff_paths_against(&self, wt: &Path, base: &str) -> Result<Vec<String>> {
         let out = run_git(&["diff", "--name-only", base], wt)?;
         Ok(out

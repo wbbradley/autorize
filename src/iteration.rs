@@ -96,6 +96,11 @@ pub fn run_iteration(
     let diff_text = inputs.git.diff_against(&wt, inputs.branch)?;
     fs::write(iter_dir.join("changes.diff"), &diff_text)?;
     let changed = inputs.git.diff_paths_against(&wt, inputs.branch)?;
+    // Unwind the capture-time staging so a kept (non-merged) worktree reads as
+    // an ordinary unstaged dirty checkout instead of a fully-staged index. The
+    // merge path re-stages independently via `commit_all_in`, so this does not
+    // affect committed content.
+    inputs.git.unstage_all_in(&wt)?;
     let denied = worktree::deny_path_matches(&changed, &inputs.cfg.boundaries.deny_paths)?;
     let diff_lines = diff_text.lines().count() as u64;
 
@@ -233,6 +238,17 @@ mod tests {
             .status()
             .unwrap_or_else(|e| panic!("spawning {args:?} failed: {e}"));
         assert!(st.success(), "command {args:?} failed: {st:?}");
+    }
+
+    /// Run a command and return its trimmed stdout, asserting success.
+    fn git_out(args: &[&str], cwd: &Path) -> String {
+        let out = Command::new(args[0])
+            .args(&args[1..])
+            .current_dir(cwd)
+            .output()
+            .unwrap_or_else(|e| panic!("spawning {args:?} failed: {e}"));
+        assert!(out.status.success(), "command {args:?} failed: {out:?}");
+        String::from_utf8(out.stdout).unwrap()
     }
 
     /// score.sh: prints |pi - value| using awk so we don't depend on python.
@@ -475,6 +491,90 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         assert_eq!(original, after);
         assert_eq!(state.best_iter, Some(0));
         assert_eq!(state.best_score, Some(0.001));
+    }
+
+    #[test]
+    fn discarded_kept_worktree_has_clean_index() {
+        // Part A: a non-merged but kept worktree must read as an ordinary
+        // unstaged dirty checkout — no stray `git add -A` index left behind.
+        let (_tmp, git, paths, branch) = init_test_env();
+
+        let cfg = make_config(
+            "echo 2.0 > value.txt",
+            "bash score.sh",
+            FailMode::Invalid,
+            vec![],
+            true, // keep_worktrees
+        );
+        let inputs = IterationInputs {
+            cfg: &cfg,
+            paths: &paths,
+            git: &git,
+            branch: &branch,
+            iter: 1,
+            // Pre-seed a much better best so value=2.0 (~1.14) is discarded.
+            best: Some((0.001, 0)),
+            recent: &[],
+            program_md: "",
+            best_diff: None,
+        };
+        let mut state = init_state();
+        state.best_score = Some(0.001);
+        state.best_iter = Some(0);
+        let rec = run_iteration(&inputs, &mut state).unwrap();
+        assert_eq!(rec.outcome, Outcome::Discarded);
+
+        let wt = paths.iter_dir(1).join("wt");
+        assert!(wt.is_dir(), "kept worktree should exist");
+        // Index matches HEAD: nothing staged.
+        let cached = git_out(&["git", "diff", "--cached"], &wt);
+        assert!(cached.trim().is_empty(), "stray staged index: {cached:?}");
+        // The agent's change is still present as an unstaged modification.
+        let porcelain = git_out(&["git", "status", "--porcelain"], &wt);
+        assert!(
+            porcelain.contains("value.txt"),
+            "expected unstaged change to value.txt, got: {porcelain:?}"
+        );
+    }
+
+    #[test]
+    fn merged_commit_contains_full_agent_diff() {
+        // Part A: unstaging at capture time must not regress merge content —
+        // the merged commit's tree must still carry the agent's change.
+        let (_tmp, git, paths, branch) = init_test_env();
+
+        let cfg = make_config(
+            "echo 3.14 > value.txt",
+            "bash score.sh",
+            FailMode::Invalid,
+            vec![],
+            false,
+        );
+        let inputs = IterationInputs {
+            cfg: &cfg,
+            paths: &paths,
+            git: &git,
+            branch: &branch,
+            iter: 1,
+            best: None,
+            recent: &[],
+            program_md: "",
+            best_diff: None,
+        };
+        let mut state = init_state();
+        let rec = run_iteration(&inputs, &mut state).unwrap();
+        assert_eq!(rec.outcome, Outcome::Merged);
+
+        // The committed tree on the tracking branch carries the agent's edit.
+        let committed = git_out(
+            &["git", "show", &format!("{branch}:value.txt")],
+            paths.project_root(),
+        );
+        assert_eq!(
+            committed.trim(),
+            "3.14",
+            "merged commit missing agent change"
+        );
     }
 
     #[test]
