@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.6] - 2026-05-23
+
+### Added
+
+- New `autorize clean <name>` subcommand to tidy a finished or abandoned experiment: it frees the `autorize/<name>` tracking branch when a stale worktree still holds it (pre-v0.2.4 residue), clears leftover staged indexes on kept iteration worktrees, and prunes registrations for `wt/` directories that no longer exist. Pass `--remove-worktrees` to also delete kept `wt/` checkouts and reclaim disk. The durable log (`iterations.jsonl`), `state.json`, and per-iteration artifacts are never touched.
+- Central append-only run log at `logs/autorize.log` (project-root relative), capturing autorize's own run narrative plus the teed stdout/stderr of every child process. `logs/` is created on startup and gitignored; set `RUST_LOG` (default `info`) to tune verbosity.
+
+### Changed
+
+- The run narrative (iteration progress, stop reasons, final summary) and `init` output now go through structured logging to stderr and `logs/autorize.log` instead of stdout. If you previously parsed this narrative from stdout, read it from stderr or the log file.
+- The dirty-tree pre-flight check for `autorize run` now also ignores the `logs/` directory (in addition to `.autorize/`), since autorize creates the log on startup.
+
+### Fixed
+
+- Kept (non-merged) iteration worktrees no longer retain a stray fully-staged `git add -A` index from diff capture; they now read as ordinary unstaged dirty checkouts. Committed/merged content is unaffected.
+
 ## [0.2.5] - 2026-05-23
 
 ### Fixed
