@@ -13,8 +13,10 @@ into a small Rust CLI you can point at any repo.
 For each iteration, `autorize`:
 
 1. Creates a fresh git worktree off the `autorize/<name>` tracking branch.
-2. Builds a prompt from your `program.md`, the boundary rules, the last 10
-   iteration records, and the diff of the best iteration so far.
+2. Builds a prompt from your `program.md`, the boundary rules, any operator
+   guidance (`autorize tell`), the last 10 iteration records (with a per-outcome
+   reason and, if enabled, a model-written summary of each attempt), and the
+   diff of the best iteration so far.
 3. Spawns your agent (any CLI — Claude Code, a shell script, anything)
    inside the worktree with a hard wall-clock budget. On timeout the whole
    process group gets `SIGTERM`, then `SIGKILL` after 5 s.
@@ -202,6 +204,12 @@ stdin       = "none"                            # "none" | "prompt"
 
 [agent.env]
 ANTHROPIC_API_KEY = "$ANTHROPIC_API_KEY"
+
+[summarize]                                     # optional; recap each iteration
+enabled = true                                  #   with a separate cheap model
+command = "claude --model haiku --print {prompt_file}"
+timeout = "60s"
+stdin   = "none"
 ```
 
 `program.md` lives next to `config.toml` and is freeform instructions for the

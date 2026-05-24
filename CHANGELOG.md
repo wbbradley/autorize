@@ -2,11 +2,19 @@
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-05-24
+
 ### Added
 
 - New `autorize tell <name> <message>` subcommand: an operator-driven channel to steer a live run. It appends a structured entry to `.autorize/<name>/guidance.jsonl` (`{ ts, added_at_iter, text }`); the running loop re-reads that file at the top of every iteration and injects all entries into a prominent `## Operator guidance` prompt section, framed as authoritative direction that takes precedence over `program.md` where they conflict. The message appears in the very next iteration and persists thereafter. `guidance.jsonl` is also safe to hand-edit; a missing/empty file renders no section, and a malformed file is non-fatal to the run (logged and ignored). In v1 all guidance is kept and shown every iteration (no consumed/expiry mechanism yet). Unquoted trailing words are joined with spaces, so `autorize tell pi do X` and `autorize tell pi "do X"` are equivalent.
 - New `[summarize]` config section: after the worker agent exits, autorize can run a **separate** (typically weaker/cheaper) model to write a 1-2 sentence summary of what the iteration attempted and why the score moved. Summaries are surfaced to the agent in later iterations under a `## Recent attempt summaries` prompt section (so it can learn from discarded attempts instead of re-exploring dead ends) and by `autorize status` (`last summary`). The step has its own `command` and `timeout` (independent of `iteration.budget`), mirrors `[agent]`'s `{prompt_file}`/`{workdir}`/`{iter}` substitution and `stdin` modes, inherits `[agent.env]`, and writes `iter-NNNN/summary-prompt.md` + `iter-NNNN/summary.md` outside the scored worktree. It is skipped for `noop` iterations and is best-effort: any failure (model unavailable, timeout, nonzero exit) leaves the summary empty without affecting the iteration outcome. Disabled by default when the section is absent (back-compatible); the scaffolded `config.toml` enables it with `claude --model haiku --print {prompt_file}`.
 - `IterationRecord` gains a `summary` field in `iterations.jsonl`. It is `#[serde(default)]`, so pre-existing logs without the field still load.
+- Every `iterations.jsonl` record now carries a populated `notes` reason describing why the iteration ended as it did: `improved: <s> from <b>` / `first valid score: <s>` (merged), `regressed: <s> vs best <b> (min|max)` (discarded), `denied: touched <paths>` (denied), `invalid: <failure detail>` (invalid), and `no changes produced` (noop). Previously `notes` was empty for normal outcomes. The field remains `#[serde(default)]`, so old logs are unaffected.
+
+### Changed
+
+- The per-iteration prompt's "Recent iterations" table gains a `reason` column (and, when summaries are enabled, a separate `## Recent attempt summaries` list), so the agent can see *why* prior attempts were kept or discarded instead of just their scores.
+- `autorize status` now prints a `last reason` line (and a `last summary` line when summaries are enabled), each shown only when the corresponding field is non-empty. If you parse `autorize status` output, expect these optional extra lines.
 
 ## [0.2.7] - 2026-05-24
 
