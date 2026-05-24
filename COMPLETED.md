@@ -699,3 +699,48 @@ and two `status` tests. Documented `[summarize]` in `src/llms.md` §4, the
 `src/templates/program.md.tmpl`; added a CHANGELOG `[Unreleased]` entry. 190
 unit + e2e + signal tests pass; `chk` clean. End-to-end smoke test confirmed a
 merged iteration's summary appears in the next iteration's prompt.
+
+## Feature B — operator guidance queue (`autorize tell`) (2026-05-24)
+
+Added an operator-driven channel to steer a live run without stopping it. The
+third and final sub-task of the original "iteration memory" feature (A1 → A2 → B);
+A1/A2 were already done.
+
+**Storage.** New `GuidanceEntry { ts, added_at_iter: Option<u64>, text }` in
+`src/storage.rs`, plus `append_guidance` / `read_guidance` mirroring the
+`append_iteration` / `read_iterations` pair (O_APPEND + per-entry `fsync` so a
+concurrent `tell` lands atomically; torn-last-line tolerance; missing file ⇒
+empty `Vec`). `ExperimentPaths::guidance_path()` points at
+`.autorize/<name>/guidance.jsonl`.
+
+**Subcommand.** New `src/cli/tell.rs` (mirrors `status.rs`), wired into the
+`Command` enum, `dispatch()`, and the `pub mod` list. `autorize tell <name>
+<message>` appends one entry; trailing words are joined with spaces (so quoted
+and unquoted forms are equivalent). `added_at_iter` is read best-effort from
+`state.json` (`iter_in_progress`, else `run_iterations_completed`), `null` when
+never run. Errors on a missing experiment or an empty message.
+
+**Prompt injection.** `PromptContext` and `IterationInputs` gained a
+`guidance: &[GuidanceEntry]` field. The run loop **re-reads `guidance.jsonl` at
+the top of every iteration** (alongside `recent_slice`/`load_best_diff`),
+treating any read error as non-fatal (warn + proceed) so a malformed hand-edit
+can't kill an expensive run. `build_prompt` renders a prominent
+`## Operator guidance` section just after the boundaries, framed as
+authoritative direction that takes precedence over `program.md`; entries show as
+`- (since iter N) <text>` (or `- <text>` when `added_at_iter` is null). Empty
+guidance renders nothing, so the existing prompt snapshot is unchanged.
+
+**Docs.** `src/llms.md`: `tell` row in the subcommands table, `guidance.jsonl`
+in the on-disk layout + reader-semantics note, and a new §15 "Steering a live
+run" with the `GuidanceEntry` schema. `README.md`: subcommands-table row, a
+"Steering a run" subsection, and `guidance.jsonl` in the layout tree.
+`mentions_all_subcommands` extended to cover `tell` (and `clean`, closing a
+pre-existing gap). CHANGELOG `[Unreleased]` entry added.
+
+**Tests.** 14 new tests: storage round-trip / torn-line / missing / hand-edit;
+two `build_prompt` rendering tests (rendered-with-framing, omitted-when-empty);
+six `tell` tests (in-progress iter / idle / no-state / multi-append / empty / 
+missing); one `iteration.rs` prompt-injection test; one `run.rs` integration
+test that seeds `guidance.jsonl` and asserts the loop reads it off disk into
+`iter-0001/prompt.md`. 211 unit + e2e + signal tests pass; `chk` clean.
+End-to-end CLI smoke test confirmed `autorize tell` is wired and its help renders.

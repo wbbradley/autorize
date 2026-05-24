@@ -87,7 +87,9 @@ mod tests {
             "autorize init",
             "autorize run",
             "autorize status",
+            "autorize tell",
             "autorize resume",
+            "autorize clean",
             "autorize llms",
         ] {
             assert!(LLMS_MD.contains(sub), "missing subcommand {sub}");

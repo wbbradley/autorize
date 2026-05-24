@@ -118,6 +118,7 @@ and stops at "ready to `autorize run <name>`" — it never starts the loop.
 | `autorize init <name>`   | Scaffold `.autorize/<name>/{config.toml,program.md}`. |
 | `autorize run <name>`    | Run the loop until deadline / cap / noop streak. `--fresh` starts another run building on the prior best. |
 | `autorize status <name>` | One-shot summary from `state.json` + `iterations.jsonl`. |
+| `autorize tell <name> <message>` | Append operator guidance; the running loop injects it into the next iteration's prompt (see below). |
 | `autorize resume <name>` | Recover after a crash; any in-progress iter is recorded as `killed` and the loop continues. |
 | `autorize clean <name>`  | Tidy a finished/abandoned experiment: detach any worktree still holding the tracking branch checked out (the branch ref is preserved), drop stale staged indexes, prune dead worktree registrations (`--remove-worktrees` also deletes kept `wt/` checkouts). Leaves the log and records intact. |
 | `autorize llms`          | Print an exhaustive agent-targeted markdown reference (config schema, on-disk layout, `IterationRecord`, state machine). |
@@ -145,6 +146,22 @@ New iterations keep comparing against the prior best and keep numbering upward.
 It is a no-op on a never-run experiment, and is refused (use `autorize resume`)
 if an iteration is mid-flight. An already-past absolute `schedule.deadline`
 errors instead of looping; switch to `total_budget` or edit the deadline first.
+
+### Steering a run
+
+To redirect a run in flight — without stopping it — append operator guidance:
+
+```sh
+autorize tell myexp "stop tuning the series — try a spigot algorithm instead"
+```
+
+`tell` appends a structured entry to `.autorize/myexp/guidance.jsonl`. The
+running loop re-reads that file at the top of every iteration and injects all
+entries into a prominent `## Operator guidance` section of the agent's prompt,
+framed as authoritative direction. The message shows up in the **next**
+iteration and persists thereafter. The file is also safe to hand-edit; a
+missing/empty file simply renders no section. In v1 all guidance persists and
+is shown every iteration.
 
 ## Config (`.autorize/<name>/config.toml`)
 
@@ -200,6 +217,7 @@ agent — included verbatim at the top of every prompt.
     program.md
     state.json             # atomic checkpoint of loop state
     iterations.jsonl       # durable append-only log
+    guidance.jsonl         # operator guidance from `autorize tell` (hand-editable)
     iter-0001/
       prompt.md            # what the agent saw
       changes.diff         # captured diff

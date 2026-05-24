@@ -2,7 +2,7 @@ use std::{fmt::Write, time::Duration};
 
 use crate::{
     config::{Boundaries, Direction},
-    storage::{IterationRecord, Outcome},
+    storage::{GuidanceEntry, IterationRecord, Outcome},
 };
 
 pub struct BestSnapshot<'a> {
@@ -14,6 +14,9 @@ pub struct BestSnapshot<'a> {
 pub struct PromptContext<'a> {
     pub program_md: &'a str,
     pub boundaries: &'a Boundaries,
+    /// Operator guidance entries (from `guidance.jsonl`), most-recently-added
+    /// last. Rendered as a prominent, authoritative section; empty → omitted.
+    pub guidance: &'a [GuidanceEntry],
     pub recent: &'a [IterationRecord],
     pub best: Option<BestSnapshot<'a>>,
     pub iter: u64,
@@ -54,6 +57,28 @@ pub fn build_prompt(ctx: &PromptContext) -> String {
             "You MUST NOT modify these paths (ENFORCED \u{2014} touching them discards the iteration):\n",
         );
             push_path_list(&mut s, &ctx.boundaries.deny_paths);
+        }
+    }
+
+    // Operator guidance is the steering channel an operator drives mid-run via
+    // `autorize tell` (or by hand-editing guidance.jsonl). Place it high and
+    // frame it as authoritative so it outranks the general program guidance.
+    if !ctx.guidance.is_empty() {
+        s.push_str("\n## Operator guidance\n\n");
+        s.push_str(
+            "The operator has issued the following direction for this run. Treat it as \
+             authoritative \u{2014} it takes precedence over the general instructions above \
+             where they conflict, and should shape what you attempt this iteration:\n\n",
+        );
+        for g in ctx.guidance {
+            match g.added_at_iter {
+                Some(i) => {
+                    let _ = writeln!(s, "- (since iter {i}) {}", g.text);
+                }
+                None => {
+                    let _ = writeln!(s, "- {}", g.text);
+                }
+            }
         }
     }
 
@@ -342,6 +367,7 @@ mod tests {
         let ctx = PromptContext {
             program_md: "# My program\n\nDo something useful.\n",
             boundaries: &b,
+            guidance: &[],
             recent: &[],
             best: None,
             iter: 1,
@@ -359,6 +385,7 @@ mod tests {
         let ctx = PromptContext {
             program_md: "",
             boundaries: &b,
+            guidance: &[],
             recent: &[],
             best: None,
             iter: 1,
@@ -378,6 +405,7 @@ mod tests {
         let ctx = PromptContext {
             program_md: "p",
             boundaries: &b,
+            guidance: &[],
             recent: &[],
             best: None,
             iter: 1,
@@ -410,6 +438,7 @@ mod tests {
         let ctx = PromptContext {
             program_md: "p",
             boundaries: &b,
+            guidance: &[],
             recent: &hist,
             best: None,
             iter: 8,
@@ -465,6 +494,7 @@ mod tests {
         let ctx = PromptContext {
             program_md: "p",
             boundaries: &b,
+            guidance: &[],
             recent: &hist,
             best: None,
             iter: 8,
@@ -503,6 +533,7 @@ mod tests {
         let ctx = PromptContext {
             program_md: "p",
             boundaries: &b,
+            guidance: &[],
             recent: &hist,
             best: None,
             iter: 8,
@@ -513,6 +544,72 @@ mod tests {
         assert!(
             !p.contains("## Recent attempt summaries"),
             "summaries section should be omitted when no summaries: {p}"
+        );
+    }
+
+    fn guide(text: &str, at: Option<u64>) -> GuidanceEntry {
+        GuidanceEntry {
+            ts: Utc.with_ymd_and_hms(2026, 5, 20, 8, 0, 0).unwrap(),
+            added_at_iter: at,
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn prompt_renders_operator_guidance() {
+        let b = Boundaries::default();
+        let guidance = vec![
+            guide(
+                "try a spigot algorithm instead of tuning the series",
+                Some(6),
+            ),
+            guide("keep the file a single line", None),
+        ];
+        let ctx = PromptContext {
+            program_md: "p",
+            boundaries: &b,
+            guidance: &guidance,
+            recent: &[],
+            best: None,
+            iter: 8,
+            budget: Duration::from_secs(60),
+            direction: Direction::Min,
+        };
+        let p = build_prompt(&ctx);
+        assert!(p.contains("## Operator guidance"), "section missing: {p}");
+        assert!(p.contains("authoritative"), "framing missing: {p}");
+        assert!(
+            p.contains("- (since iter 6) try a spigot algorithm instead of tuning the series"),
+            "iter-tagged entry missing: {p}"
+        );
+        // A None added_at_iter renders without the "(since iter ...)" prefix.
+        assert!(
+            p.contains("- keep the file a single line"),
+            "untagged entry missing: {p}"
+        );
+        assert!(
+            !p.contains("(since iter ) keep"),
+            "None entry should not render an empty iter tag: {p}"
+        );
+    }
+
+    #[test]
+    fn prompt_omits_operator_guidance_when_empty() {
+        let b = Boundaries::default();
+        let ctx = PromptContext {
+            program_md: "p",
+            boundaries: &b,
+            guidance: &[],
+            recent: &[],
+            best: None,
+            iter: 1,
+            budget: Duration::from_secs(60),
+            direction: Direction::Min,
+        };
+        let p = build_prompt(&ctx);
+        assert!(
+            !p.contains("## Operator guidance"),
+            "guidance section should be omitted when empty: {p}"
         );
     }
 
@@ -586,6 +683,7 @@ mod tests {
         let ctx = PromptContext {
             program_md: "p",
             boundaries: &b,
+            guidance: &[],
             recent: &[],
             best: Some(best),
             iter: 8,
@@ -628,6 +726,7 @@ mod tests {
         let ctx = PromptContext {
             program_md: "# Pi experiment\n\nMake value.txt closer to pi.\n",
             boundaries: &b,
+            guidance: &[],
             recent: &hist,
             best: Some(best),
             iter: 8,

@@ -38,6 +38,10 @@ impl ExperimentPaths {
         self.root().join("iterations.jsonl")
     }
 
+    pub fn guidance_path(&self) -> PathBuf {
+        self.root().join("guidance.jsonl")
+    }
+
     pub fn state_path(&self) -> PathBuf {
         self.root().join("state.json")
     }

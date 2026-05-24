@@ -199,29 +199,6 @@ disagreement. Tolerate torn last line. Refuse if `base_commit` missing.
 
 ## Next Up
 
-> **Iteration memory** (originally one feature) was split into three independently-shippable
-> sub-tasks A1 → A2 → B. Shared premise: today each iteration sees only a compact table of the
-> last 10 records (`iter | outcome | score`) plus the single best diff (src/prompt.rs:25-120,
-> src/cli/run.rs:159-219). Discarded attempts contribute nothing but a score, so the agent can't
-> connect "iter 6 discarded @ 3.15" to *what was tried* and keeps re-exploring dead pathways. All
-> three converge on the prompt-builder (`PromptContext` / `build_prompt`, src/prompt.rs:14-96).
-> Note the run loop loads `program.md` **once** before the loop (src/cli/run.rs:79) — guidance
-> (B) must be (re)read **inside** the loop each iteration. A1 (deterministic `notes` + the
-> prompt recent-iterations `reason` column + `describe_failure`) and A2 (the `[summarize]`
-> step + per-iteration `summary` surfaced under `## Recent attempt summaries`) are **done**;
-> B remains.
-
-- **[feature] B — operator guidance queue (`autorize tell`)** — An operator-driven channel to steer a live run.
-  - **Storage:** structured, append-only `guidance.jsonl` under `.autorize/<name>/` — each entry `{ "ts": <RFC3339>, "added_at_iter": <u64|null>, "text": "..." }`. Add `guidance_path()` to `ExperimentPaths` (src/experiment.rs:5-61). Structured entries (vs a plain blob) keep a future "consumed-by-next-iteration / expiry" toggle cheap; **for now all entries persist and are shown every iteration** (user decision). Tolerate a torn last line like `read_iterations`.
-  - **New subcommand `autorize tell <name> <message>`:** new `src/cli/tell.rs` (mirror src/cli/status.rs), wired into the `Command` enum + `dispatch()` match (src/cli.rs:8-42) and the `pub mod` list. It appends one entry; `added_at_iter` is read best-effort from `state.json` (`iter_in_progress`/`run_iterations_completed`), else `null`. Documented as hand-editable. Because `tell` runs from a separate process while `run` loops, coordination is purely file-based — the run loop **re-reads `guidance.jsonl` at the top of every iteration** and injects it.
-  - **Prompt injection:** add a `guidance: &'a [GuidanceEntry]` field to `PromptContext` (src/prompt.rs:14-22) and `IterationInputs` (src/iteration.rs:17-27); load it in the run loop alongside `recent_slice`/`load_best_diff` (src/cli/run.rs:159-219). Render a prominent `## Operator guidance` section (placed after `program.md`, around the boundaries) framed as authoritative operator direction, e.g. `- (since iter 6) try a spigot algorithm instead of tuning the series`.
-
-  **Docs:** src/llms.md (`guidance.jsonl`, the `tell` subcommand — the `mentions_all_subcommands` test must keep passing), README.md (subcommands table + a short "steering a run" subsection).
-
-  **Open question:** unbounded `guidance.jsonl` growth/staleness — deferred; structured format leaves room for a later consumed/expiry/ack mechanism, but v1 shows all entries.
-
-  **Acceptance:** (a) `autorize tell pi "explore XYZ"` appends to `guidance.jsonl` and the message appears in the very next iteration's prompt under `## Operator guidance`, persisting across subsequent iterations; (b) the guidance file is also editable by hand and picked up next iteration; (c) a missing/empty `guidance.jsonl` renders no section (no error); (d) docs reflect the subcommand + file. Independent of A1/A2 (additive on the prompt builder).
-
 - **[feature/correctness-high] Multi-dimensional scoring with baseline normalization** — autorize today scores only agent-modified worktrees and never the pristine tree, so `best_score` starts `None` and the decision `(None, _) => true` (src/iteration.rs:138, mirrored at src/cli/run.rs:332) unconditionally merges the *first* valid iteration even if it regresses against the starting state — contradicting "keeps improvements, discards regressions" (README.md:18, PLAN.md:6). Separately, real objectives are multi-dimensional (e.g. four latency benchmarks) and must be normalized against a per-dimension baseline so each dimension is optimized equally. Users currently hand-roll this entirely in `objective.command` (see the reference pattern at `~/src/ls-py-run-handler/.autorize/runs-perf/`: `bench-baseline.sh` writes a flat `baseline.json` map once on pristine code, deny-enforced; `score.sh` emits the scalar `Σ (median+2·IQR)/baseline`). Make this first-class:
 
   **Design (locked with user):**

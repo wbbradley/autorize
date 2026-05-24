@@ -9,7 +9,7 @@ use crate::{
     experiment::ExperimentPaths,
     prompt::{self, BestSnapshot, PromptContext, SummaryContext},
     scoring::{self, ScoreDecision},
-    storage::{self, CurrentStep, IterationRecord, Outcome, StateSnapshot},
+    storage::{self, CurrentStep, GuidanceEntry, IterationRecord, Outcome, StateSnapshot},
     subproc,
     worktree::{self, Git},
 };
@@ -24,6 +24,9 @@ pub struct IterationInputs<'a> {
     pub recent: &'a [IterationRecord],
     pub program_md: &'a str,
     pub best_diff: Option<&'a str>,
+    /// Operator guidance loaded from `guidance.jsonl` at the top of this
+    /// iteration; injected verbatim into the prompt.
+    pub guidance: &'a [GuidanceEntry],
 }
 
 /// Run one full iteration end-to-end. Mutates `state` and persists it
@@ -67,6 +70,7 @@ pub fn run_iteration(
     let prompt_text = prompt::build_prompt(&PromptContext {
         program_md: inputs.program_md,
         boundaries: &inputs.cfg.boundaries,
+        guidance: inputs.guidance,
         recent: inputs.recent,
         best: best_snapshot,
         iter: inputs.iter,
@@ -525,6 +529,7 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             recent: &[],
             program_md: "",
             best_diff: None,
+            guidance: &[],
         };
         let mut state = init_state();
         let rec = run_iteration(&inputs, &mut state).unwrap();
@@ -572,6 +577,7 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             recent: &[],
             program_md: "",
             best_diff: None,
+            guidance: &[],
         };
         let mut state = init_state();
         let rec = run_iteration(&inputs, &mut state).unwrap();
@@ -610,6 +616,7 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             recent: &[],
             program_md: "",
             best_diff: None,
+            guidance: &[],
         };
         let mut state = init_state();
         let rec = run_iteration(&inputs, &mut state).unwrap();
@@ -648,6 +655,7 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             recent: &[],
             program_md: "",
             best_diff: None,
+            guidance: &[],
         };
         let mut state = init_state();
         state.best_score = Some(0.001);
@@ -695,6 +703,7 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             recent: &[],
             program_md: "",
             best_diff: None,
+            guidance: &[],
         };
         let mut state = init_state();
         state.best_score = Some(0.001);
@@ -738,6 +747,7 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             recent: &[],
             program_md: "",
             best_diff: None,
+            guidance: &[],
         };
         let mut state = init_state();
         let rec = run_iteration(&inputs, &mut state).unwrap();
@@ -777,6 +787,7 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             recent: &[],
             program_md: "",
             best_diff: None,
+            guidance: &[],
         };
         let mut state = init_state();
         let rec = run_iteration(&inputs, &mut state).unwrap();
@@ -818,6 +829,7 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             recent: &[],
             program_md: "",
             best_diff: None,
+            guidance: &[],
         };
         let mut state = init_state();
         let rec = run_iteration(&inputs, &mut state).unwrap();
@@ -899,5 +911,42 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         assert_eq!(rec.summary, "");
         assert!(!paths.iter_dir(1).join("summary.md").exists());
         assert!(!paths.iter_dir(1).join("summary-prompt.md").exists());
+    }
+
+    #[test]
+    fn operator_guidance_appears_in_prompt() {
+        // Guidance handed to the iteration is rendered into the prompt the
+        // agent sees (iter-NNNN/prompt.md), under `## Operator guidance`.
+        let (_tmp, git, paths, branch) = init_test_env();
+        let cfg = make_config("true", "bash score.sh", FailMode::Invalid, vec![], true);
+        let guidance = vec![GuidanceEntry {
+            ts: Utc::now(),
+            added_at_iter: Some(2),
+            text: "explore a spigot algorithm".to_string(),
+        }];
+        let inputs = IterationInputs {
+            cfg: &cfg,
+            paths: &paths,
+            git: &git,
+            branch: &branch,
+            iter: 1,
+            best: None,
+            recent: &[],
+            program_md: "",
+            best_diff: None,
+            guidance: &guidance,
+        };
+        let mut state = init_state();
+        run_iteration(&inputs, &mut state).unwrap();
+
+        let prompt = fs::read_to_string(paths.iter_dir(1).join("prompt.md")).unwrap();
+        assert!(
+            prompt.contains("## Operator guidance"),
+            "guidance section missing:\n{prompt}"
+        );
+        assert!(
+            prompt.contains("- (since iter 2) explore a spigot algorithm"),
+            "guidance text missing:\n{prompt}"
+        );
     }
 }

@@ -186,6 +186,14 @@ pub(crate) fn run_loop(
             _ => None,
         };
         let best_diff_text = best.and_then(|(_, i)| load_best_diff(&paths, i));
+        // Re-read operator guidance every iteration so a concurrent
+        // `autorize tell` (or a hand-edit of guidance.jsonl) is picked up. A
+        // read error (e.g. a malformed hand-edit) is non-fatal: an expensive
+        // run must not die over auxiliary steering input.
+        let guidance = storage::read_guidance(&paths.guidance_path()).unwrap_or_else(|e| {
+            tracing::warn!("failed to read guidance.jsonl ({e}); ignoring this iteration");
+            Vec::new()
+        });
 
         let inputs = IterationInputs {
             cfg: &cfg,
@@ -197,6 +205,7 @@ pub(crate) fn run_loop(
             recent: &recent,
             program_md: &program_md,
             best_diff: best_diff_text.as_deref(),
+            guidance: &guidance,
         };
 
         let rec = iteration::run_iteration(&inputs, &mut state)?;
@@ -1244,5 +1253,46 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         assert!(state_path.exists(), "state.json should exist");
         let git = Git::new(tmp.path().to_path_buf());
         assert!(git.branch_exists("autorize/test").unwrap());
+    }
+
+    #[test]
+    fn guidance_jsonl_picked_up_by_run_loop() {
+        // Acceptance (a)/(b): an entry sitting in guidance.jsonl before the run
+        // (as `autorize tell` or a hand-edit would leave it) is read off disk at
+        // the top of the iteration and rendered into the prompt the agent saw.
+        let tmp = init_test_repo();
+        let root = write_experiment(
+            tmp.path(),
+            "test",
+            "true", // noop agent: prompt.md is still written before InvokeAgent
+            "bash score.sh",
+            Duration::from_secs(60),
+            1,
+        );
+        let entry = crate::storage::GuidanceEntry {
+            ts: Utc::now(),
+            added_at_iter: Some(0),
+            text: "switch to a spigot algorithm".to_string(),
+        };
+        crate::storage::append_guidance(&root.join("guidance.jsonl"), &entry).unwrap();
+
+        run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            false,
+            false,
+        )
+        .unwrap();
+
+        let prompt = fs::read_to_string(root.join("iter-0001").join("prompt.md")).unwrap();
+        assert!(
+            prompt.contains("## Operator guidance"),
+            "guidance section missing:\n{prompt}"
+        );
+        assert!(
+            prompt.contains("switch to a spigot algorithm"),
+            "guidance text missing:\n{prompt}"
+        );
     }
 }

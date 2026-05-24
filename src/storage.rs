@@ -62,6 +62,22 @@ pub struct IterationRecord {
     pub summary: String,
 }
 
+/// One line of operator guidance recorded by `autorize tell` (or hand-edited
+/// into `guidance.jsonl`). Structured rather than a plain blob so a future
+/// consumed/expiry/ack mechanism stays cheap to add; in v1 every entry
+/// persists and is shown to the agent every iteration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuidanceEntry {
+    /// When the guidance was recorded.
+    pub ts: DateTime<Utc>,
+    /// Best-effort iteration number the run was on when this was added (from
+    /// `state.json`), or `null` when no state existed yet. Informational only —
+    /// rendered as a `(since iter N)` hint in the prompt.
+    pub added_at_iter: Option<u64>,
+    /// The guidance text shown to the agent.
+    pub text: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateSnapshot {
     pub experiment: String,
@@ -134,6 +150,41 @@ pub fn read_iterations(path: &Path) -> Result<Vec<IterationRecord>> {
     let mut lines: Vec<&str> = text.split('\n').filter(|l| !l.is_empty()).collect();
     if let Some(last) = lines.last()
         && serde_json::from_str::<IterationRecord>(last).is_err()
+    {
+        lines.pop();
+    }
+    lines
+        .into_iter()
+        .map(|l| serde_json::from_str(l).map_err(Into::into))
+        .collect()
+}
+
+/// Append one operator-guidance entry to `guidance.jsonl`. Mirrors
+/// [`append_iteration`]: `O_APPEND` + per-line `fsync` so a concurrent
+/// `autorize tell` (running while `autorize run` loops) lands atomically.
+pub fn append_guidance(path: &Path, entry: &GuidanceEntry) -> Result<()> {
+    let line = serde_json::to_string(entry)?;
+    let mut f = OpenOptions::new().create(true).append(true).open(path)?;
+    f.write_all(line.as_bytes())?;
+    f.write_all(b"\n")?;
+    f.sync_all()?;
+    tracing::info!("appended guidance to {}", path.display());
+    Ok(())
+}
+
+/// Read all operator-guidance entries. Mirrors [`read_iterations`]: a missing
+/// file yields an empty `Vec`, and a torn last line (e.g. a `tell` that landed
+/// mid-write) is dropped. The file is documented as hand-editable.
+pub fn read_guidance(path: &Path) -> Result<Vec<GuidanceEntry>> {
+    let bytes = match fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let mut lines: Vec<&str> = text.split('\n').filter(|l| !l.is_empty()).collect();
+    if let Some(last) = lines.last()
+        && serde_json::from_str::<GuidanceEntry>(last).is_err()
     {
         lines.pop();
     }
@@ -375,6 +426,64 @@ mod tests {
         assert_eq!(recs.len(), 1);
         assert_eq!(recs[0].summary, "");
         assert_eq!(recs[0].notes, "first valid score: 2.500000");
+    }
+
+    fn sample_guidance(text: &str, at: Option<u64>) -> GuidanceEntry {
+        GuidanceEntry {
+            ts: Utc.with_ymd_and_hms(2026, 5, 20, 8, 0, 0).unwrap(),
+            added_at_iter: at,
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn guidance_round_trips() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("guidance.jsonl");
+        append_guidance(&p, &sample_guidance("try a spigot algorithm", Some(6))).unwrap();
+        append_guidance(&p, &sample_guidance("stop tuning the series", None)).unwrap();
+        let got = read_guidance(&p).unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].text, "try a spigot algorithm");
+        assert_eq!(got[0].added_at_iter, Some(6));
+        assert_eq!(got[1].text, "stop tuning the series");
+        assert_eq!(got[1].added_at_iter, None);
+    }
+
+    #[test]
+    fn read_guidance_missing_returns_empty() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("guidance.jsonl");
+        assert!(read_guidance(&p).unwrap().is_empty());
+    }
+
+    #[test]
+    fn read_guidance_drops_torn_final_line() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("guidance.jsonl");
+        append_guidance(&p, &sample_guidance("good", Some(1))).unwrap();
+        // A torn half-record with no trailing newline (a `tell` killed mid-write).
+        let mut f = OpenOptions::new().append(true).open(&p).unwrap();
+        f.write_all(b"{\"ts\":\"2026-05-20T08:00:00Z\",\"added_at_iter\":")
+            .unwrap();
+        f.sync_all().unwrap();
+        let got = read_guidance(&p).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].text, "good");
+    }
+
+    #[test]
+    fn read_guidance_accepts_hand_written_line() {
+        // A human can append a line by hand; whitespace-only/blank lines are
+        // skipped and a well-formed object is read.
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("guidance.jsonl");
+        let hand = "\n{\"ts\":\"2026-05-20T08:00:00Z\",\"added_at_iter\":null,\"text\":\"hand edited\"}\n\n";
+        fs::write(&p, hand).unwrap();
+        let got = read_guidance(&p).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].text, "hand edited");
+        assert_eq!(got[0].added_at_iter, None);
     }
 
     #[test]

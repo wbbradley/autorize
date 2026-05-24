@@ -24,6 +24,7 @@ atomically so the loop can be killed and resumed at any point.
 | `autorize init <name>`   | Scaffold `.autorize/<name>/{config.toml, program.md}`.                                                |
 | `autorize run <name>`    | Run the loop until deadline / `max_iterations` / `max_consecutive_noops`. `--fresh` starts another run on a finished experiment (see §11/§14). |
 | `autorize status <name>` | Print a one-shot summary from `state.json` + `iterations.jsonl`.                                      |
+| `autorize tell <name> <message>` | Append a line of **operator guidance** to `guidance.jsonl`; the running loop re-reads it each iteration and injects it into the prompt under `## Operator guidance` (see §15). |
 | `autorize resume <name>` | Recover after a crash; any in-progress iter is recorded as `killed` and the loop continues.           |
 | `autorize clean <name>`  | Tidy a finished/abandoned experiment: detach any worktree still holding the tracking branch checked out (the branch ref is **preserved** — never created/moved/deleted), drop stale staged indexes, prune dead worktree registrations. `--remove-worktrees` also deletes kept `wt/` checkouts. Never touches `iterations.jsonl`/`state.json`. |
 | `autorize llms`          | Print this document.                                                                                  |
@@ -306,6 +307,7 @@ killed iterations.
     program.md               # freeform agent instructions
     state.json               # atomic checkpoint of loop state
     iterations.jsonl         # durable append-only log, one JSON object per line
+    guidance.jsonl           # operator guidance (see §15); one JSON object per line; hand-editable
     run.lock                 # advisory flock held by the active `autorize run`; contains its pid
     iter-0001/
       prompt.md              # full prompt the agent saw
@@ -335,6 +337,11 @@ state.json, iterations.jsonl) is recorded — dozens of lines per iteration.
 - `iterations.jsonl` is opened with `O_APPEND` and `fsync`'d after every
   record. The reader tolerates a torn last line (drops it silently); a
   corrupt non-last line is an error.
+- `guidance.jsonl` is written the same way (`O_APPEND` + `fsync` per entry,
+  so a concurrent `autorize tell` lands atomically while `run` loops) and read
+  with the same torn-last-line tolerance. The run loop additionally treats *any*
+  read error as non-fatal (logs a warning and proceeds with no guidance), so a
+  malformed hand-edit can never kill a run.
 - The tracking branch `autorize/<name>` records every merged iteration as
   a separate commit. `git log autorize/<name>` is the improvement history;
   `git diff <base>..autorize/<name>` is the cumulative change since the
@@ -624,6 +631,40 @@ Rules:
 This is the supported way to "run it again"; deleting `state.json` by hand is
 not (it would also drop `best_score`/`best_iter`, letting the next iteration
 trivially "improve" against nothing).
+
+## 15. Steering a live run with `autorize tell`
+
+`autorize tell <name> <message>` lets an operator inject mid-run direction
+without stopping the loop. It appends one structured entry to
+`.autorize/<name>/guidance.jsonl`; because `tell` runs in a separate process
+from the looping `autorize run`, coordination is purely file-based — the run
+loop **re-reads `guidance.jsonl` at the top of every iteration** and renders all
+entries into a prominent `## Operator guidance` section of the prompt (placed
+just after the boundaries), framed as authoritative direction that takes
+precedence over the general `program.md` instructions where they conflict.
+
+```sh
+autorize tell pi "stop tuning the Leibniz series — try a spigot algorithm"
+```
+
+The message appears in the **very next** iteration's prompt and persists in
+every iteration thereafter. In v1 all entries are kept and shown every
+iteration (no consumed/expiry/ack mechanism yet — the structured format leaves
+room to add one later).
+
+Each line of `guidance.jsonl` is one `GuidanceEntry` JSON object:
+
+| Field           | Type              | Meaning                                                                                       |
+|-----------------|-------------------|-----------------------------------------------------------------------------------------------|
+| `ts`            | RFC3339 timestamp | When the guidance was recorded.                                                               |
+| `added_at_iter` | integer or null   | Best-effort iteration the run was on when the entry was added (the in-flight iter, else the per-run completed count from `state.json`); `null` if the experiment had never run. Rendered as a `(since iter N)` hint. |
+| `text`          | string            | The guidance shown to the agent.                                                              |
+
+`guidance.jsonl` is also safe to **edit by hand** — add or remove lines and the
+next iteration picks them up. A missing or empty file renders no section and is
+not an error. (Unquoted trailing words on the `tell` command line are joined
+with spaces, so `autorize tell pi do X` and `autorize tell pi "do X"` are
+equivalent.)
 
 ---
 
