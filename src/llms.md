@@ -22,7 +22,7 @@ atomically so the loop can be killed and resumed at any point.
 | Command                  | What it does                                                                                          |
 |--------------------------|-------------------------------------------------------------------------------------------------------|
 | `autorize init <name>`   | Scaffold `.autorize/<name>/{config.toml, program.md}`.                                                |
-| `autorize run <name>`    | Run the loop until deadline / `max_iterations` / `max_consecutive_noops`.                             |
+| `autorize run <name>`    | Run the loop until deadline / `max_iterations` / `max_consecutive_noops`. `--fresh` starts another run on a finished experiment (see §11/§14). |
 | `autorize status <name>` | Print a one-shot summary from `state.json` + `iterations.jsonl`.                                      |
 | `autorize resume <name>` | Recover after a crash; any in-progress iter is recorded as `killed` and the loop continues.           |
 | `autorize clean <name>`  | Tidy a finished/abandoned experiment: detach any worktree still holding the tracking branch checked out (the branch ref is **preserved** — never created/moved/deleted), drop stale staged indexes, prune dead worktree registrations. `--remove-worktrees` also deletes kept `wt/` checkouts. Never touches `iterations.jsonl`/`state.json`. |
@@ -84,7 +84,7 @@ Each iteration ends in exactly one of these six **outcomes** (the
 | `discarded` | Agent produced a diff that scored, but the score did not improve.                      |
 | `noop`      | Agent produced an empty diff (no changes). Counts toward `max_consecutive_noops`.      |
 | `invalid`   | Scoring failed under `fail_mode = "invalid"`; iteration is discarded, not counted as best. |
-| `killed`    | Recorded by `autorize resume` for an iteration that was in-flight at crash time.       |
+| `killed`    | Recorded by `autorize resume` for an iteration that was in-flight at crash time. Counts toward the lifetime `iterations_completed` but **not** the per-run `max_iterations` budget. |
 | `denied`    | Diff touched a `boundaries.deny_paths` pattern; iteration discarded, branch unchanged. |
 
 ## 4. Configuration: `.autorize/<name>/config.toml`
@@ -340,7 +340,8 @@ Each line in `iterations.jsonl` is one `IterationRecord` JSON object:
 | `best_iter`            | integer or null       | Iteration number whose merge set `best_score`.                                               |
 | `started_at`           | RFC3339 timestamp     | When the run loop first started this experiment.                                             |
 | `deadline`             | RFC3339 timestamp     | Absolute UTC deadline computed from `schedule`.                                              |
-| `iterations_completed` | integer (u64)         | Total number of records in `iterations.jsonl`.                                               |
+| `iterations_completed` | integer (u64)         | Lifetime count of records in `iterations.jsonl` (every completed iteration, **including** reconciled `killed` records). Never reset. |
+| `run_iterations_completed` | integer (u64)     | Iterations done in the *current* run; what `max_iterations` is checked against, and what `autorize run --fresh` resets to 0. A reconciled `killed` record does **not** bump it. State files predating this field migrate it to `iterations_completed` on load. |
 | `consecutive_noops`    | integer (u32)         | Streak length of consecutive `noop` outcomes; resets on any non-noop.                        |
 
 ## 12. Pre-flight checks performed by `autorize run`
@@ -365,7 +366,9 @@ Before entering the loop, `autorize run`:
   in-progress marker, and continues the loop.
 
 `autorize run --allow-dirty <name>` overrides only the dirty-tree check.
-All other pre-flight checks still apply.
+All other pre-flight checks still apply. `autorize run --fresh <name>` resets
+the run-level stop conditions on an existing, non-in-progress state (see §14);
+it bypasses no pre-flight check — the in-progress refusal above still fires.
 
 ## 13. Walkthrough: `examples/pi-digits/`
 
@@ -516,6 +519,7 @@ Suppose the harness was killed mid-iter at iter 3. `state.json` looks like:
   "started_at": "2026-05-20T08:00:00Z",
   "deadline":   "2026-05-20T08:05:00Z",
   "iterations_completed": 2,
+  "run_iterations_completed": 2,
   "consecutive_noops": 0
 }
 ```
@@ -545,6 +549,45 @@ in-progress iteration found; use `autorize resume`
 
 …and then continues the loop at iter 4 as if `autorize run` had been
 invoked.
+
+## 14. Starting another run with `autorize run --fresh`
+
+Once a run finishes (deadline fired, `max_iterations` reached, or the
+consecutive-noop streak hit), a plain `autorize run <name>` reloads the saved
+`state.json` and immediately re-hits the same stop condition — it does no new
+work. To start *another* run that builds on the prior best, pass `--fresh`:
+
+```
+autorize run <name> --fresh
+```
+
+`--fresh`:
+
+- **Resets** the run-level stop conditions: recomputes `deadline` from
+  `schedule` (a `total_budget` becomes `now + total_budget`; a relative or
+  natural-language `deadline` recomputes), resets `run_iterations_completed`
+  and `consecutive_noops` to 0, and refreshes `started_at`.
+- **Preserves** everything else: `best_score`/`best_iter`, `base_commit`, the
+  lifetime `iterations_completed`, the `autorize/<name>` branch and its tip,
+  and every record in `iterations.jsonl`. New iterations keep comparing against
+  the prior best and keep numbering strictly upward from the highest existing
+  iter.
+
+Rules:
+
+- On a never-run experiment (no `state.json`) `--fresh` is a no-op: it behaves
+  exactly like a normal first run.
+- If an iteration is in progress (`iter_in_progress != null`), `--fresh` is
+  refused with a pointer to `autorize resume` — it never discards real
+  in-flight work.
+- If the recomputed deadline is an already-past **absolute** RFC3339 instant,
+  `--fresh` errors (`schedule.deadline "<value>" is in the past; …`) instead of
+  entering a loop that exits immediately. Switch to `total_budget` or edit the
+  deadline.
+
+This is the supported way to "run it again"; deleting `state.json` by hand is
+not (it would also drop `best_score`/`best_iter`, letting the next iteration
+trivially "improve" against nothing).
 
 ---
 

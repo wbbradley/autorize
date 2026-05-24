@@ -192,6 +192,9 @@ pub fn run_iteration(
     state.iter_in_progress = None;
     state.current_step = CurrentStep::Idle;
     state.iterations_completed += 1;
+    // A normally-completed iteration always counts toward the current run's
+    // `max_iterations` budget (the outcome here is never `killed`).
+    state.run_iterations_completed += 1;
     if outcome == Outcome::Noop {
         state.consecutive_noops += 1;
     } else {
@@ -345,6 +348,7 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             started_at: now,
             deadline: now + chrono::Duration::hours(1),
             iterations_completed: 0,
+            run_iterations_completed: 0,
             consecutive_noops: 0,
         }
     }
@@ -383,6 +387,7 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         assert!(paths.state_path().exists());
         assert_eq!(state.current_step, CurrentStep::Idle);
         assert_eq!(state.iterations_completed, 1);
+        assert_eq!(state.run_iterations_completed, 1);
         assert_eq!(state.best_iter, Some(1));
         assert_eq!(state.best_score, Some(s));
 

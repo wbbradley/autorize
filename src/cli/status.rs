@@ -49,7 +49,10 @@ fn format_summary(state: &StateSnapshot, records: &[IterationRecord]) -> String 
     s.push_str(&format!("experiment   {}\n", state.experiment));
     s.push_str(&format!("branch       {}\n", state.branch));
     s.push_str(&format!("base_commit  {}\n", state.base_commit));
-    s.push_str(&format!("iterations   {}\n", state.iterations_completed));
+    s.push_str(&format!(
+        "iterations   {} total, {} this run\n",
+        state.iterations_completed, state.run_iterations_completed
+    ));
     s.push_str(&format!("noop streak  {}\n", state.consecutive_noops));
     s.push_str(&format!("last outcome {last_outcome}\n"));
     match (state.best_iter, state.best_score) {
@@ -105,6 +108,7 @@ mod tests {
             started_at: now,
             deadline: now + chrono::Duration::seconds(3600),
             iterations_completed: 0,
+            run_iterations_completed: 0,
             consecutive_noops: 0,
         }
     }
@@ -128,7 +132,10 @@ mod tests {
     fn status_prints_no_iterations() {
         let state = sample_state();
         let out = format_summary(&state, &[]);
-        assert!(out.contains("iterations   0"), "got: {out}");
+        assert!(
+            out.contains("iterations   0 total, 0 this run"),
+            "got: {out}"
+        );
         assert!(out.contains("last outcome (none)"), "got: {out}");
         assert!(out.contains("best         (none)"), "got: {out}");
     }
@@ -139,10 +146,15 @@ mod tests {
         state.best_iter = Some(5);
         state.best_score = Some(1.23456);
         state.iterations_completed = 7;
+        state.run_iterations_completed = 3;
         let records = vec![sample_record(7, Outcome::Merged)];
         let out = format_summary(&state, &records);
         assert!(out.contains("iter 5"), "got: {out}");
         assert!(out.contains("1.234560"), "got: {out}");
+        assert!(
+            out.contains("iterations   7 total, 3 this run"),
+            "got: {out}"
+        );
         assert!(out.contains("last outcome merged"), "got: {out}");
     }
 

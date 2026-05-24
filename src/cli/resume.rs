@@ -16,7 +16,7 @@ pub struct ResumeArgs {
 
 pub fn run(args: ResumeArgs) -> anyhow::Result<()> {
     let project_root = env::current_dir()?;
-    super::run::run_loop(args.name, args.allow_dirty, project_root, true)?;
+    super::run::run_loop(args.name, args.allow_dirty, project_root, true, false)?;
     Ok(())
 }
 
@@ -175,12 +175,19 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             started_at: now,
             deadline: now + chrono::Duration::seconds(3600),
             iterations_completed: initial_completed,
+            run_iterations_completed: initial_completed,
             consecutive_noops: 0,
         };
         storage::write_state(&root.join("state.json"), &state).unwrap();
 
-        crate::cli::run::run_loop("test".to_string(), false, tmp.path().to_path_buf(), true)
-            .unwrap_or_else(|e| panic!("resume failed: {e}"));
+        crate::cli::run::run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            true,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("resume failed: {e}"));
 
         let recs = storage::read_iterations(&root.join("iterations.jsonl")).unwrap();
         let killed = recs
@@ -245,12 +252,19 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             started_at: now,
             deadline: now + chrono::Duration::seconds(3600),
             iterations_completed: initial_completed,
+            run_iterations_completed: initial_completed,
             consecutive_noops: 0,
         };
         storage::write_state(&root.join("state.json"), &state).unwrap();
 
-        crate::cli::run::run_loop("test".to_string(), false, tmp.path().to_path_buf(), true)
-            .unwrap_or_else(|e| panic!("resume failed: {e}"));
+        crate::cli::run::run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            true,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("resume failed: {e}"));
 
         let recs = storage::read_iterations(&root.join("iterations.jsonl")).unwrap();
         let for_3: Vec<&IterationRecord> = recs.iter().filter(|r| r.iter == 3).collect();
@@ -322,12 +336,19 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             started_at: now,
             deadline: now + chrono::Duration::seconds(3600),
             iterations_completed: 4,
+            run_iterations_completed: 4,
             consecutive_noops: 0,
         };
         storage::write_state(&root.join("state.json"), &state).unwrap();
 
-        crate::cli::run::run_loop("test".to_string(), false, tmp.path().to_path_buf(), true)
-            .unwrap_or_else(|e| panic!("resume failed: {e}"));
+        crate::cli::run::run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            true,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("resume failed: {e}"));
 
         let recs = storage::read_iterations(&root.join("iterations.jsonl")).unwrap();
         let for_5: Vec<&IterationRecord> = recs.iter().filter(|r| r.iter == 5).collect();
@@ -361,9 +382,14 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         );
 
         // Resume requires state.json to exist.
-        let err =
-            crate::cli::run::run_loop("test".to_string(), false, tmp.path().to_path_buf(), true)
-                .unwrap_err();
+        let err = crate::cli::run::run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            true,
+            false,
+        )
+        .unwrap_err();
         assert!(format!("{err}").contains("state.json"), "got: {err}");
     }
 }

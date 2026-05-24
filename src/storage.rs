@@ -66,7 +66,16 @@ pub struct StateSnapshot {
     pub best_iter: Option<u64>,
     pub started_at: DateTime<Utc>,
     pub deadline: DateTime<Utc>,
+    /// Lifetime count of records in `iterations.jsonl` (every completed
+    /// iteration, including reconciled `killed` records). Never reset.
     pub iterations_completed: u64,
+    /// Iterations done in the *current* run; what `max_iterations` is checked
+    /// against, and what `autorize run --fresh` resets to 0. A reconciled
+    /// `killed` record does NOT bump this (a crash should not burn a budget
+    /// slot). Defaults to 0 for, and is migrated by `read_state` from,
+    /// pre-existing state files that predate this field.
+    #[serde(default)]
+    pub run_iterations_completed: u64,
     pub consecutive_noops: u32,
 }
 
@@ -77,7 +86,22 @@ pub fn write_state(path: &Path, state: &StateSnapshot) -> Result<()> {
 
 pub fn read_state(path: &Path) -> Result<Option<StateSnapshot>> {
     match fs::read(path) {
-        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+        Ok(bytes) => {
+            let mut v: serde_json::Value = serde_json::from_slice(&bytes)?;
+            // Migrate state files that predate the per-run iteration counter:
+            // attribute all prior iterations to the current run so a non-fresh
+            // re-run behaves exactly as before (it stops at the same cap).
+            if let Some(obj) = v.as_object_mut()
+                && !obj.contains_key("run_iterations_completed")
+            {
+                let lifetime = obj
+                    .get("iterations_completed")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!(0));
+                obj.insert("run_iterations_completed".to_string(), lifetime);
+            }
+            Ok(Some(serde_json::from_value(v)?))
+        }
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.into()),
     }
@@ -153,6 +177,7 @@ mod tests {
             started_at: Utc.with_ymd_and_hms(2026, 5, 20, 8, 0, 0).unwrap(),
             deadline: Utc.with_ymd_and_hms(2026, 5, 20, 12, 0, 0).unwrap(),
             iterations_completed: 6,
+            run_iterations_completed: 6,
             consecutive_noops: 0,
         }
     }
@@ -220,7 +245,34 @@ mod tests {
         assert_eq!(got.started_at, s.started_at);
         assert_eq!(got.deadline, s.deadline);
         assert_eq!(got.iterations_completed, s.iterations_completed);
+        assert_eq!(got.run_iterations_completed, s.run_iterations_completed);
         assert_eq!(got.consecutive_noops, s.consecutive_noops);
+    }
+
+    #[test]
+    fn read_state_migrates_missing_run_counter() {
+        // A state.json predating `run_iterations_completed` must load with the
+        // per-run counter seeded from the lifetime count, so a non-fresh re-run
+        // stops at the same cap it would have before this field existed.
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("state.json");
+        let legacy = r#"{
+  "experiment": "pi",
+  "branch": "autorize/pi",
+  "base_commit": "abc123",
+  "iter_in_progress": null,
+  "current_step": "Idle",
+  "best_score": 3.14,
+  "best_iter": 5,
+  "started_at": "2026-05-20T08:00:00Z",
+  "deadline": "2026-05-20T12:00:00Z",
+  "iterations_completed": 6,
+  "consecutive_noops": 0
+}"#;
+        fs::write(&p, legacy).unwrap();
+        let got = read_state(&p).unwrap().unwrap();
+        assert_eq!(got.iterations_completed, 6);
+        assert_eq!(got.run_iterations_completed, 6);
     }
 
     #[test]

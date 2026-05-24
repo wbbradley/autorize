@@ -413,13 +413,18 @@ fn resume_records_killed_then_continues() {
         String::from_utf8_lossy(&out.stderr)
     );
 
+    // A `killed` record (the abandoned iter 1) is a jsonl record but does NOT
+    // consume a `max_iterations` slot, so the run still does its full 3 real
+    // iterations (2, 3, 4): 1 killed + 3 real = 4 records. The mock agent
+    // regresses on every 4th iteration (iter % 4 == 0), so iter 4 is discarded.
     let recs = read_jsonl(&p.join(".autorize/pi/iterations.jsonl"));
-    assert_eq!(recs.len(), 3, "expected 3 records, got {recs:?}");
+    assert_eq!(recs.len(), 4, "expected 4 records, got {recs:?}");
     assert_eq!(recs[0]["iter"].as_u64(), Some(1));
     assert_eq!(recs[0]["outcome"], "killed");
     assert_eq!(recs[0]["notes"], "resumed after crash");
     assert_eq!(recs[1]["iter"].as_u64(), Some(2));
     assert_eq!(recs[2]["iter"].as_u64(), Some(3));
+    assert_eq!(recs[3]["iter"].as_u64(), Some(4));
     assert_eq!(
         recs[1]["outcome"], "merged",
         "iter 2 should merge; rec={:?}",
@@ -429,5 +434,10 @@ fn resume_records_killed_then_continues() {
         recs[2]["outcome"], "merged",
         "iter 3 should merge; rec={:?}",
         recs[2]
+    );
+    assert_eq!(
+        recs[3]["outcome"], "discarded",
+        "iter 4 regresses (iter % 4 == 0) and must be discarded; rec={:?}",
+        recs[3]
     );
 }

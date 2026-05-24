@@ -584,3 +584,44 @@ internal `git add -A`. Made the e2e repos hermetic (`git config core.excludesFil
 /dev/null`) and filed the underlying product gap (deny enforcement is blind to
 gitignored paths) as a new PLAN item. All 155 unit + 6 e2e + 1 signal tests pass;
 `chk` clean.
+
+## `autorize run --fresh` — start another run on a finished experiment (2026-05-24)
+
+Added a `--fresh` flag to `autorize run` so a completed experiment can do
+another batch of work building on the prior best, replacing the unsanctioned
+"delete `state.json` by hand" recipe. `--fresh` recomputes the deadline from
+`schedule`, resets the consecutive-noop streak and the per-run iteration budget,
+and refreshes `started_at`, while preserving `best_score`/`best_iter`, the
+`autorize/<name>` branch tip, `base_commit`, and the full `iterations.jsonl`
+history. New iterations keep comparing against the prior best and keep numbering
+strictly upward.
+
+**Counters.** Split `StateSnapshot.iterations_completed` (lifetime; ≈ records in
+`iterations.jsonl`, never reset) from a new `run_iterations_completed` (per-run;
+what `max_iterations` is checked against, what `--fresh` resets to 0). A migration
+shim in `storage::read_state` seeds `run_iterations_completed` from
+`iterations_completed` for state files predating the field, so non-fresh re-runs
+behave exactly as before. Resolved the cross-referenced "killed eats a budget
+slot" bug (user-confirmed): a reconciled `killed` record bumps the lifetime count
+only, never the per-run budget, so a crash no longer costs a `max_iterations`
+slot — `record_killed` leaves `run_iterations_completed` untouched while
+`run_iteration`/`synthesize`/`replay` bump it. `autorize status` now shows
+"N total, M this run".
+
+**Behavior.** `apply_fresh_reset` runs only in the existing-state arm of
+`run_loop`, after the `base_commit` and in-progress checks; an in-progress
+iteration still errors and points at `autorize resume`, and `--fresh` is a no-op
+on a never-run experiment. An already-past absolute RFC3339 `schedule.deadline`
+errors clearly ("…is in the past; …") instead of entering a loop that exits
+immediately; durations / `total_budget` / natural-language deadlines recompute
+fine.
+
+**Tests/docs.** Added six acceptance tests in `src/cli/run.rs` (re-run vs no-op,
+best preserved + regression discarded, branch tip untouched, deadline recompute,
+expired-deadline error, in-progress refusal, never-run no-op). Updated the e2e
+`resume_records_killed_then_continues` to expect 4 records (1 killed + 3 real)
+now that a crash doesn't consume a budget slot. Documented `--fresh` in
+`README.md` ("Starting another run") and `src/llms.md` (new §14, run row, the
+`run_iterations_completed` schema row, and the `killed`-counter note). 162 unit
++ 6 e2e + 1 signal tests pass; `chk` clean. End-to-end smoke test confirmed:
+run → no-op re-run → `--fresh` does N more iterations building on the prior best.

@@ -30,11 +30,20 @@ pub struct RunArgs {
     /// (excluding `.autorize/` which is always ignored).
     #[arg(long)]
     pub allow_dirty: bool,
+    /// Start another run on a finished experiment, building on the prior best.
+    /// Recomputes the deadline from `schedule`, and resets the per-run
+    /// iteration budget (`max_iterations`) and the consecutive-noop streak,
+    /// while preserving `best_score`/`best_iter`, the `autorize/<name>` branch
+    /// tip, and the full `iterations.jsonl` history. A no-op on a never-run
+    /// experiment; refused (use `autorize resume`) if an iteration is in
+    /// progress.
+    #[arg(long)]
+    pub fresh: bool,
 }
 
 pub fn run(args: RunArgs) -> anyhow::Result<()> {
     let project_root = env::current_dir()?;
-    run_loop(args.name, args.allow_dirty, project_root, false)?;
+    run_loop(args.name, args.allow_dirty, project_root, false, args.fresh)?;
     Ok(())
 }
 
@@ -42,11 +51,19 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
 /// `recover_iter` is true, an in-progress iteration found in state.json
 /// is recorded as `killed` and the loop continues; otherwise the loop
 /// refuses and points the user at `autorize resume`.
+///
+/// When `fresh` is true (only `autorize run --fresh`; `resume` passes false)
+/// and a clean (non-in-progress) state already exists, the run-level stop
+/// conditions are reset before the loop: the deadline is recomputed from
+/// `schedule`, and `consecutive_noops` / `run_iterations_completed` /
+/// `started_at` are reset, while best score, branch tip, and history are
+/// preserved. `fresh` is a no-op when there is no existing state.
 pub(crate) fn run_loop(
     name: String,
     allow_dirty: bool,
     project_root: PathBuf,
     recover_iter: bool,
+    fresh: bool,
 ) -> Result<()> {
     let paths = ExperimentPaths::new(project_root, name.clone());
     if !paths.root().exists() {
@@ -101,6 +118,7 @@ pub(crate) fn run_loop(
                 started_at: now,
                 deadline: deadline.at(),
                 iterations_completed: 0,
+                run_iterations_completed: 0,
                 consecutive_noops: 0,
             };
             info!("mkdir -p {}", paths.root().display());
@@ -124,6 +142,12 @@ pub(crate) fn run_loop(
                 }
                 reconcile_in_progress(&paths, &mut s, &git, &cfg)?;
             }
+            // `--fresh` only ever reaches here on a clean (non-in-progress)
+            // state, since the in-progress branch above errors out for a plain
+            // `run` (recover_iter is false). `resume` always passes fresh=false.
+            if fresh {
+                apply_fresh_reset(&paths, &mut s, &cfg)?;
+            }
             s
         }
     };
@@ -139,7 +163,7 @@ pub(crate) fn run_loop(
             break;
         }
         if cfg.iteration.max_iterations > 0
-            && state.iterations_completed >= cfg.iteration.max_iterations
+            && state.run_iterations_completed >= cfg.iteration.max_iterations
         {
             info!(
                 "reached max_iterations={}; stopping.",
@@ -215,6 +239,41 @@ fn load_best_diff(paths: &ExperimentPaths, iter: u64) -> Option<String> {
     fs::read_to_string(p).ok()
 }
 
+/// Reset the run-level stop conditions for `autorize run --fresh`, preserving
+/// all prior progress (best score, branch tip, history, lifetime count). Errors
+/// if the recomputed deadline is already in the past (only a hard past RFC3339
+/// `schedule.deadline` trips this — durations / `total_budget` recompute fine),
+/// rather than entering a loop that exits immediately. Persists the mutated
+/// state so a crash right after `--fresh` does not re-trigger the old deadline.
+fn apply_fresh_reset(
+    paths: &ExperimentPaths,
+    state: &mut StateSnapshot,
+    cfg: &Config,
+) -> Result<()> {
+    let now = Utc::now();
+    let deadline = schedule::compute_deadline(&cfg.schedule, now, Local::now())?;
+    if deadline.is_expired(now) {
+        return Err(Error::Schedule(format!(
+            "schedule.deadline {:?} is in the past; edit config.toml or switch to \
+             total_budget before `--fresh`",
+            cfg.schedule.deadline.as_deref().unwrap_or("")
+        )));
+    }
+    state.deadline = deadline.at();
+    state.consecutive_noops = 0;
+    state.run_iterations_completed = 0;
+    state.started_at = now;
+    info!(
+        "--fresh: reset run budget and deadline (now {now}); preserving best={}",
+        match (state.best_iter, state.best_score) {
+            (Some(i), Some(s)) => format!("iter {i} score {s:.6}"),
+            _ => "(none)".to_string(),
+        }
+    );
+    storage::write_state(&paths.state_path(), state)?;
+    Ok(())
+}
+
 /// Resume-time reconciliation for an in-progress iteration. Picks one of
 /// three branches based on what's actually on disk and on the tracking
 /// branch:
@@ -267,6 +326,12 @@ fn replay_existing_record(
     state.iter_in_progress = None;
     state.current_step = CurrentStep::Idle;
     state.iterations_completed += 1;
+    // A reconciled `killed` record does not count toward the per-run budget
+    // (a crash should not burn a `max_iterations` slot); any other replayed
+    // outcome was a real completed iteration in this run.
+    if rec.outcome != Outcome::Killed {
+        state.run_iterations_completed += 1;
+    }
     if rec.outcome == Outcome::Noop {
         state.consecutive_noops += 1;
     } else {
@@ -303,6 +368,7 @@ fn synthesize_merged_record(
     state.iter_in_progress = None;
     state.current_step = CurrentStep::Idle;
     state.iterations_completed += 1;
+    state.run_iterations_completed += 1;
     state.consecutive_noops = 0;
     storage::write_state(&paths.state_path(), state)?;
     Ok(())
@@ -326,6 +392,9 @@ fn record_killed(paths: &ExperimentPaths, state: &mut StateSnapshot, iter: u64) 
 
     state.iter_in_progress = None;
     state.current_step = CurrentStep::Idle;
+    // A `killed` record is a jsonl record (so it bumps the lifetime count) but
+    // it represents an abandoned, crashed iteration — it must NOT consume a
+    // per-run `max_iterations` slot, so `run_iterations_completed` is untouched.
     state.iterations_completed += 1;
     storage::write_state(&paths.state_path(), state)?;
     Ok(())
@@ -528,6 +597,7 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             started_at: now,
             deadline: now + chrono::Duration::seconds(3600),
             iterations_completed,
+            run_iterations_completed: iterations_completed,
             consecutive_noops: 0,
         };
         storage::write_state(&root.join("state.json"), &state).unwrap();
@@ -547,7 +617,14 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         // Make the tree dirty outside .autorize/
         fs::write(tmp.path().join("stray.txt"), "x\n").unwrap();
 
-        let err = run_loop("test".to_string(), false, tmp.path().to_path_buf(), false).unwrap_err();
+        let err = run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            false,
+            false,
+        )
+        .unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("uncommitted"), "got: {msg}");
     }
@@ -566,7 +643,14 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         fs::write(tmp.path().join("stray.txt"), "x\n").unwrap();
 
         // Should not error on dirty when allow_dirty=true.
-        run_loop("test".to_string(), true, tmp.path().to_path_buf(), false).unwrap();
+        run_loop(
+            "test".to_string(),
+            true,
+            tmp.path().to_path_buf(),
+            false,
+            false,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -589,7 +673,14 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             "x\n",
         )
         .unwrap();
-        run_loop("test".to_string(), false, tmp.path().to_path_buf(), false).unwrap();
+        run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            false,
+            false,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -611,7 +702,14 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             0,
         );
 
-        let err = run_loop("test".to_string(), false, tmp.path().to_path_buf(), false).unwrap_err();
+        let err = run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            false,
+            false,
+        )
+        .unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("unreachable"), "got: {msg}");
     }
@@ -631,7 +729,14 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         let sha = git.head_sha().unwrap();
         seed_state(&root, "test", &sha, Some(3), 2);
 
-        let err = run_loop("test".to_string(), false, tmp.path().to_path_buf(), false).unwrap_err();
+        let err = run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            false,
+            false,
+        )
+        .unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("resume"), "got: {msg}");
     }
@@ -647,7 +752,14 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             Duration::from_millis(50),
             0,
         );
-        run_loop("test".to_string(), false, tmp.path().to_path_buf(), false).unwrap();
+        run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            false,
+            false,
+        )
+        .unwrap();
 
         let state_path = tmp.path().join(".autorize").join("test").join("state.json");
         assert!(state_path.exists(), "state.json should exist");
@@ -669,7 +781,14 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         let lock_path = root.join("run.lock");
         let _held = crate::lock::ExperimentLock::acquire(&lock_path).unwrap();
 
-        let err = run_loop("test".to_string(), false, tmp.path().to_path_buf(), false).unwrap_err();
+        let err = run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            false,
+            false,
+        )
+        .unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("lock"), "got: {msg}");
     }
@@ -685,7 +804,14 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             Duration::from_millis(50),
             0,
         );
-        run_loop("test".to_string(), false, tmp.path().to_path_buf(), false).unwrap();
+        run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            false,
+            false,
+        )
+        .unwrap();
         let lock_path = tmp.path().join(".autorize/test/run.lock");
         let _l = crate::lock::ExperimentLock::acquire(&lock_path).unwrap();
     }
@@ -741,7 +867,14 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
             Duration::from_secs(60),
             2,
         );
-        run_loop("test".to_string(), false, tmp.path().to_path_buf(), false).unwrap();
+        run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            false,
+            false,
+        )
+        .unwrap();
         let log = tmp
             .path()
             .join(".autorize")
@@ -771,7 +904,14 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         cfg.iteration.keep_worktrees = true;
         fs::write(&cfg_path, toml::to_string(&cfg).unwrap()).unwrap();
 
-        run_loop("test".to_string(), false, tmp.path().to_path_buf(), false).unwrap();
+        run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            false,
+            false,
+        )
+        .unwrap();
 
         let recs = storage::read_iterations(&root.join("iterations.jsonl")).unwrap();
         assert_eq!(recs.len(), 2, "both iterations should run, got {recs:?}");
@@ -779,5 +919,326 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         // Both worktrees are kept on disk (keep_worktrees = true).
         assert!(root.join("iter-0001").join("wt").is_dir());
         assert!(root.join("iter-0002").join("wt").is_dir());
+    }
+
+    #[test]
+    fn fresh_reruns_after_completion() {
+        // (a) + (c): a completed `max_iterations` experiment re-runs another N
+        // iterations under `--fresh` (and exits immediately without it), with
+        // iter numbers continuing strictly past the prior max and the lifetime
+        // counter climbing while the per-run counter resets.
+        let tmp = init_test_repo();
+        let root = write_experiment(
+            tmp.path(),
+            "test",
+            "echo improvement > value.txt",
+            "bash score.sh",
+            Duration::from_secs(60),
+            2,
+        );
+
+        // First run: max_iterations = 2 → exactly 2 records.
+        run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            false,
+            false,
+        )
+        .unwrap();
+        let recs = storage::read_iterations(&root.join("iterations.jsonl")).unwrap();
+        assert_eq!(recs.len(), 2, "first run should do 2 iters, got {recs:?}");
+        let after_first = storage::read_state(&root.join("state.json"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(after_first.run_iterations_completed, 2);
+        assert_eq!(after_first.iterations_completed, 2);
+
+        // Re-run WITHOUT --fresh: the stop condition is already hit → no new work.
+        run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            false,
+            false,
+        )
+        .unwrap();
+        let recs = storage::read_iterations(&root.join("iterations.jsonl")).unwrap();
+        assert_eq!(
+            recs.len(),
+            2,
+            "non-fresh re-run must not add records, got {recs:?}"
+        );
+
+        // Re-run WITH --fresh: another (up to) 2 iterations, continuing numbering.
+        run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            false,
+            true,
+        )
+        .unwrap();
+        let recs = storage::read_iterations(&root.join("iterations.jsonl")).unwrap();
+        assert_eq!(
+            recs.len(),
+            4,
+            "fresh re-run should add 2 more, got {recs:?}"
+        );
+        for (idx, rec) in recs.iter().enumerate() {
+            assert_eq!(
+                rec.iter,
+                idx as u64 + 1,
+                "iter numbers must be 1..=N strict; rec={rec:?}"
+            );
+        }
+        let after_fresh = storage::read_state(&root.join("state.json"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            after_fresh.iterations_completed, 4,
+            "lifetime count keeps climbing"
+        );
+        assert_eq!(
+            after_fresh.run_iterations_completed, 2,
+            "per-run count reset on --fresh then re-grew to the cap"
+        );
+    }
+
+    #[test]
+    fn fresh_preserves_best_and_discards_regression() {
+        // (b) + (d): --fresh keeps the prior best, the first new iteration
+        // compares against it (a regression is `discarded`, not `merged`), and
+        // --fresh itself never moves the tracking-branch tip.
+        let tmp = init_test_repo();
+        let root = write_experiment(
+            tmp.path(),
+            "test",
+            "echo 3.14 > value.txt",
+            "bash score.sh",
+            Duration::from_secs(60),
+            1,
+        );
+
+        run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            false,
+            false,
+        )
+        .unwrap();
+        let after_first = storage::read_state(&root.join("state.json"))
+            .unwrap()
+            .unwrap();
+        let best_score = after_first.best_score.expect("first run should set best");
+        assert_eq!(after_first.best_iter, Some(1));
+
+        let git = Git::new(tmp.path().to_path_buf());
+        let tip_before = git.resolve_ref("autorize/test").unwrap().unwrap();
+
+        // Swap in an agent whose change scores WORSE than the prior best.
+        let cfg_path = root.join("config.toml");
+        let mut cfg: Config = toml::from_str(&fs::read_to_string(&cfg_path).unwrap()).unwrap();
+        cfg.agent.command = "echo 2.0 > value.txt".to_string();
+        fs::write(&cfg_path, toml::to_string(&cfg).unwrap()).unwrap();
+
+        run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            false,
+            true,
+        )
+        .unwrap();
+
+        let recs = storage::read_iterations(&root.join("iterations.jsonl")).unwrap();
+        assert_eq!(
+            recs.len(),
+            2,
+            "fresh run should append one record, got {recs:?}"
+        );
+        assert_eq!(recs[1].iter, 2);
+        assert_eq!(
+            recs[1].outcome,
+            Outcome::Discarded,
+            "iter 2 regressed vs the prior best and must be discarded"
+        );
+
+        let after_fresh = storage::read_state(&root.join("state.json"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            after_fresh.best_score,
+            Some(best_score),
+            "best_score preserved across --fresh"
+        );
+        assert_eq!(
+            after_fresh.best_iter,
+            Some(1),
+            "best_iter preserved across --fresh"
+        );
+
+        let tip_after = git.resolve_ref("autorize/test").unwrap().unwrap();
+        assert_eq!(
+            tip_before, tip_after,
+            "no merge → --fresh leaves the tracking-branch tip unchanged"
+        );
+    }
+
+    #[test]
+    fn fresh_recomputes_deadline_from_total_budget() {
+        // (e1): a total_budget schedule gets its deadline recomputed as
+        // now + total_budget, and started_at advances.
+        let tmp = init_test_repo();
+        let root = write_experiment(
+            tmp.path(),
+            "test",
+            "echo 3.14 > value.txt",
+            "bash score.sh",
+            Duration::from_secs(3600),
+            1,
+        );
+
+        run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            false,
+            false,
+        )
+        .unwrap();
+        let first = storage::read_state(&root.join("state.json"))
+            .unwrap()
+            .unwrap();
+
+        run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            false,
+            true,
+        )
+        .unwrap();
+        let fresh = storage::read_state(&root.join("state.json"))
+            .unwrap()
+            .unwrap();
+
+        assert!(
+            fresh.deadline > first.deadline,
+            "deadline should be recomputed forward: {:?} -> {:?}",
+            first.deadline,
+            fresh.deadline
+        );
+        assert!(
+            fresh.started_at > first.started_at,
+            "started_at should advance on --fresh"
+        );
+        assert_eq!(fresh.run_iterations_completed, 1);
+        assert_eq!(fresh.iterations_completed, 2, "lifetime keeps climbing");
+    }
+
+    #[test]
+    fn fresh_errors_on_expired_absolute_deadline() {
+        // (e2): an already-past absolute RFC3339 deadline errors clearly under
+        // --fresh rather than entering a loop that exits immediately.
+        let tmp = init_test_repo();
+        let root = write_experiment(
+            tmp.path(),
+            "test",
+            "true",
+            "bash score.sh",
+            Duration::from_secs(60),
+            0,
+        );
+        let cfg_path = root.join("config.toml");
+        let mut cfg: Config = toml::from_str(&fs::read_to_string(&cfg_path).unwrap()).unwrap();
+        cfg.schedule = Schedule {
+            total_budget: None,
+            deadline: Some("2020-01-01T00:00:00Z".to_string()),
+        };
+        fs::write(&cfg_path, toml::to_string(&cfg).unwrap()).unwrap();
+
+        // First run creates state and exits immediately (no error, no iters).
+        run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            false,
+            false,
+        )
+        .unwrap();
+        let recs = storage::read_iterations(&root.join("iterations.jsonl")).unwrap();
+        assert!(
+            recs.is_empty(),
+            "expired deadline should run no iterations, got {recs:?}"
+        );
+
+        // --fresh recomputes the same past instant → clear error.
+        let err = run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            false,
+            true,
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("in the past"), "got: {err}");
+    }
+
+    #[test]
+    fn fresh_on_in_progress_still_errors() {
+        // (f): --fresh on an experiment with an in-progress iteration still
+        // refuses and points at `autorize resume`.
+        let tmp = init_test_repo();
+        let root = write_experiment(
+            tmp.path(),
+            "test",
+            "true",
+            "bash score.sh",
+            Duration::from_secs(60),
+            1,
+        );
+        let git = Git::new(tmp.path().to_path_buf());
+        let sha = git.head_sha().unwrap();
+        seed_state(&root, "test", &sha, Some(3), 2);
+
+        let err = run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            false,
+            true,
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("resume"), "got: {err}");
+    }
+
+    #[test]
+    fn fresh_on_never_run_behaves_like_first_run() {
+        // (g): --fresh on a never-run experiment is a no-op flag — it behaves
+        // exactly like a normal first run (no error).
+        let tmp = init_test_repo();
+        write_experiment(
+            tmp.path(),
+            "test",
+            "true",
+            "bash score.sh",
+            Duration::from_millis(50),
+            0,
+        );
+        run_loop(
+            "test".to_string(),
+            false,
+            tmp.path().to_path_buf(),
+            false,
+            true,
+        )
+        .unwrap();
+
+        let state_path = tmp.path().join(".autorize").join("test").join("state.json");
+        assert!(state_path.exists(), "state.json should exist");
+        let git = Git::new(tmp.path().to_path_buf());
+        assert!(git.branch_exists("autorize/test").unwrap());
     }
 }

@@ -116,14 +116,35 @@ and stops at "ready to `autorize run <name>`" — it never starts the loop.
 | Command | What it does |
 |---|---|
 | `autorize init <name>`   | Scaffold `.autorize/<name>/{config.toml,program.md}`. |
-| `autorize run <name>`    | Run the loop until deadline / cap / noop streak. |
+| `autorize run <name>`    | Run the loop until deadline / cap / noop streak. `--fresh` starts another run building on the prior best. |
 | `autorize status <name>` | One-shot summary from `state.json` + `iterations.jsonl`. |
 | `autorize resume <name>` | Recover after a crash; any in-progress iter is recorded as `killed` and the loop continues. |
 | `autorize clean <name>`  | Tidy a finished/abandoned experiment: detach any worktree still holding the tracking branch checked out (the branch ref is preserved), drop stale staged indexes, prune dead worktree registrations (`--remove-worktrees` also deletes kept `wt/` checkouts). Leaves the log and records intact. |
 | `autorize llms`          | Print an exhaustive agent-targeted markdown reference (config schema, on-disk layout, `IterationRecord`, state machine). |
 
 `autorize run` accepts `--allow-dirty` if you need to start with uncommitted
-changes outside `.autorize/`.
+changes outside `.autorize/`, and `--fresh` to start another run on a finished
+experiment (see below).
+
+### Starting another run
+
+When a run finishes (deadline, `max_iterations`, or the consecutive-noop
+streak), re-running `autorize run <name>` is a no-op — it reloads the saved
+state and re-hits the same stop condition. To do *another* batch of work that
+builds on what you already have, pass `--fresh`:
+
+```sh
+autorize run myexp --fresh
+```
+
+`--fresh` recomputes the deadline from `schedule`, resets the per-run
+`max_iterations` budget and the consecutive-noop streak, and refreshes
+`started_at` — while **preserving** the prior `best_score`/`best_iter`, the
+`autorize/<name>` branch and its tip, and the full `iterations.jsonl` history.
+New iterations keep comparing against the prior best and keep numbering upward.
+It is a no-op on a never-run experiment, and is refused (use `autorize resume`)
+if an iteration is mid-flight. An already-past absolute `schedule.deadline`
+errors instead of looping; switch to `total_budget` or edit the deadline first.
 
 ## Config (`.autorize/<name>/config.toml`)
 
