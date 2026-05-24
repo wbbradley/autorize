@@ -654,3 +654,48 @@ the new column; added `scoring::describe_failure` and two `status` tests
 `src/llms.md` §11 (the `notes` row + annotated sample line + status sample) and
 `src/templates/program.md.tmpl`. 165 unit + 6 e2e + 1 signal tests pass; `chk`
 clean.
+
+## A2 — Model-generated per-iteration summary (`[summarize]` + `summary`) (2026-05-24)
+
+Second of three sub-tasks split out from the "Iteration memory" feature (builds
+on A1). Discarded attempts contributed only a score and a one-line reason, so
+the agent couldn't connect "iter 6 discarded @ 3.15" to *what was tried* and
+kept re-exploring dead ends.
+
+**Behavior.** After the worker agent exits, `run_iteration` optionally runs a
+**separate** (typically weaker/cheaper) model to write a 1-2 sentence recap of
+what the iteration attempted and why the score moved. The step is gated on
+`summarize.enabled && outcome != Noop`, runs while the worktree still exists (it
+is the summarizer's `{workdir}`) but writes only under `iter-NNNN/`
+(`summary-prompt.md` + `summary.md`), never `wt/`, so it can't trip deny
+enforcement. It reuses `agent::run_agent` with `summarize.command/timeout/stdin`
+and the agent's `env`/`workdir_var`, so it is bounded by `summarize.timeout`
+independently of `iteration.budget`. Best-effort by contract: a spawn error,
+timeout, nonzero exit, or empty output logs a warning and leaves `summary` empty
+without changing the outcome (`summarize_iteration` never returns `Err`). The
+summary prompt is built from the iteration's own artifacts only — the diff (head
+capped) plus tails of stdout/stderr and the outcome/score/best context — not
+`program.md` guidance or prior summaries, so a cheap model suffices.
+
+**Config.** New `[summarize]` section (`enabled`/`command`/`timeout`/`stdin`),
+`#[serde(default)]` on `Config` so absent ⇒ disabled (back-compatible). Validation
+requires a non-empty `command` and (when `stdin = "none"`) a `{prompt_file}`
+placeholder, mirroring `[agent]`. The scaffolded template enables it with
+`claude --model haiku --print {prompt_file}`.
+
+**Surfacing.** `prompt::build_prompt` renders a `## Recent attempt summaries`
+list (recent records with a non-empty `summary`), kept separate from the table
+so multi-sentence text isn't crammed into a cell; the section is omitted when no
+summaries exist (so the existing prompt snapshot is unchanged). `autorize status`
+prints a `last summary` line. `IterationRecord` gained a `#[serde(default)]
+summary` field, so pre-A2 `iterations.jsonl` logs still load.
+
+**Tests/docs.** Added `build_summary_prompt` + `SummaryContext` with two prompt
+tests, two `build_prompt` summaries-section tests, five `iteration.rs` tests
+(generated / noop-skipped / failure / timeout / disabled), six `config.rs` tests
+(parse + four validation cases + template-enables), a storage back-compat test,
+and two `status` tests. Documented `[summarize]` in `src/llms.md` §4, the
+`summary` field in §11, the new artifacts in §10, and a note in
+`src/templates/program.md.tmpl`; added a CHANGELOG `[Unreleased]` entry. 190
+unit + e2e + signal tests pass; `chk` clean. End-to-end smoke test confirmed a
+merged iteration's summary appears in the next iteration's prompt.
