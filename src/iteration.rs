@@ -364,12 +364,19 @@ fn run_summarizer(cfg: &Config, workdir: &Path, iter: u64, prompt_path: &Path) -
 /// Returns `Ok(true)` if any record changed (the caller persists via
 /// [`storage::rewrite_iterations`]). Best-effort throughout: a single record's
 /// failure logs a warning and continues; this never aborts the run. Records
-/// that are `noop`/`killed`, whose `iter-NNNN/changes.diff` is gone, or that
-/// already carry a summary are left untouched.
+/// that are `noop`/`killed`, or whose `iter-NNNN/changes.diff` is gone, are
+/// always left untouched.
+///
+/// When `force` is false (the startup path) records that already carry a
+/// summary are skipped — only missing summaries are filled. When `force` is
+/// true (`autorize backfill --force`) every eligible record is regenerated,
+/// overwriting existing summaries; this is how an operator re-summarizes a
+/// whole experiment after changing `summarize.command`.
 pub fn backfill_missing_summaries(
     cfg: &Config,
     paths: &ExperimentPaths,
     records: &mut [IterationRecord],
+    force: bool,
 ) -> Result<bool> {
     if !cfg.summarize.enabled {
         return Ok(false);
@@ -391,7 +398,7 @@ pub fn backfill_missing_summaries(
             best = Some((s, rec.iter));
         }
 
-        let needs_summary = rec.summary.is_empty()
+        let needs_summary = (force || rec.summary.is_empty())
             && rec.outcome != Outcome::Noop
             && rec.outcome != Outcome::Killed;
         if !needs_summary {
@@ -429,8 +436,9 @@ pub fn backfill_missing_summaries(
             continue;
         }
 
-        // The old worktree is gone, and the summarize prompt is self-contained
-        // (the command just reads `{prompt_file}`), so run from the project root.
+        // The old worktree is gone, and the summarizer only needs the prompt we
+        // just wrote (passed as `{prompt_file}` or piped on stdin per
+        // `summarize.stdin`), so run from the project root.
         let Some(summary) = run_summarizer(cfg, paths.project_root(), rec.iter, &prompt_path)
         else {
             continue;
@@ -1104,7 +1112,7 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         ];
         storage::rewrite_iterations(&paths.iterations_log(), &records).unwrap();
 
-        let changed = backfill_missing_summaries(&cfg, &paths, &mut records).unwrap();
+        let changed = backfill_missing_summaries(&cfg, &paths, &mut records, false).unwrap();
         assert!(changed, "backfill should report a change");
         assert_eq!(records[0].summary, "SUMMARY_MARKER");
         assert_eq!(records[1].summary, "SUMMARY_MARKER");
@@ -1140,13 +1148,40 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         seed_iter_artifacts(&paths, 3);
         storage::rewrite_iterations(&paths.iterations_log(), &records).unwrap();
 
-        let changed = backfill_missing_summaries(&cfg, &paths, &mut records).unwrap();
+        let changed = backfill_missing_summaries(&cfg, &paths, &mut records, false).unwrap();
         assert!(!changed, "nothing eligible should change");
         assert_eq!(records[0].summary, "");
         assert_eq!(records[1].summary, "");
         assert_eq!(records[2].summary, "preexisting");
         assert!(!paths.iter_dir(1).join("summary.md").exists());
         assert!(!paths.iter_dir(2).join("summary.md").exists());
+    }
+
+    #[test]
+    fn backfill_force_overwrites_but_still_skips_ineligible() {
+        // force=true regenerates records that already have a summary, but the
+        // noop/killed and missing-artifact exclusions still apply.
+        let tmp = tempdir().unwrap();
+        let paths = ExperimentPaths::new(tmp.path().to_path_buf(), "test".to_string());
+        fs::create_dir_all(paths.root()).unwrap();
+        let cfg = summarize_cfg();
+
+        // iter 1: merged with a preexisting summary + artifacts -> regenerated.
+        // iter 2: noop -> skipped even under force (no diff to summarize).
+        // iter 3: merged with a summary but no artifacts -> skipped (can't rebuild).
+        let mut records = vec![
+            mk_rec(1, Outcome::Merged, Some(0.1), "stale"),
+            mk_rec(2, Outcome::Noop, None, "stale"),
+            mk_rec(3, Outcome::Merged, Some(0.2), "stale"),
+        ];
+        seed_iter_artifacts(&paths, 1);
+        storage::rewrite_iterations(&paths.iterations_log(), &records).unwrap();
+
+        let changed = backfill_missing_summaries(&cfg, &paths, &mut records, true).unwrap();
+        assert!(changed, "the eligible record should change under force");
+        assert_eq!(records[0].summary, "SUMMARY_MARKER", "iter 1 regenerated");
+        assert_eq!(records[1].summary, "stale", "noop left untouched");
+        assert_eq!(records[2].summary, "stale", "no-artifact record untouched");
     }
 
     #[test]
@@ -1161,7 +1196,7 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
 
         seed_iter_artifacts(&paths, 1);
         let mut records = vec![mk_rec(1, Outcome::Merged, Some(0.1), "")];
-        let changed = backfill_missing_summaries(&cfg, &paths, &mut records).unwrap();
+        let changed = backfill_missing_summaries(&cfg, &paths, &mut records, false).unwrap();
         assert!(!changed);
         assert_eq!(records[0].summary, "");
         assert!(!paths.iter_dir(1).join("summary.md").exists());
@@ -1188,7 +1223,7 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
         ];
         storage::rewrite_iterations(&paths.iterations_log(), &records).unwrap();
 
-        backfill_missing_summaries(&cfg, &paths, &mut records).unwrap();
+        backfill_missing_summaries(&cfg, &paths, &mut records, false).unwrap();
         // iter 1 had no prior best.
         assert!(
             records[0].summary.contains("best so far: none"),

@@ -161,7 +161,7 @@ pub(crate) fn run_loop(
     // step failed). Best-effort: a failure here must not sink an otherwise
     // healthy run, and mutating `records` in place means the first prompt's
     // recent-iterations slice immediately reflects the backfilled summaries.
-    if let Err(e) = iteration::backfill_missing_summaries(&cfg, &paths, &mut records) {
+    if let Err(e) = iteration::backfill_missing_summaries(&cfg, &paths, &mut records, false) {
         tracing::warn!("backfill of missing summaries failed ({e}); continuing");
     }
 
