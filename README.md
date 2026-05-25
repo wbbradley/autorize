@@ -120,7 +120,7 @@ and stops at "ready to `autorize run <name>`" — it never starts the loop.
 | `autorize init <name>`   | Scaffold `.autorize/<name>/{config.toml,program.md}`. |
 | `autorize run <name>`    | Run the loop until deadline / cap / noop streak. `--fresh` starts another run building on the prior best. |
 | `autorize status <name>` | One-shot summary from `state.json` + `iterations.jsonl`. |
-| `autorize list <name>`   | Dump every iteration as markdown (newest-first, one section per iteration with its summary); colorized on a TTY, plain markdown when piped. `--color <auto\|always\|never>` overrides detection. |
+| `autorize list <name>`   | Dump every iteration as markdown (oldest-first, one section per iteration with its summary); colorized on a TTY, plain markdown when piped. `--color <auto\|always\|never>` overrides detection. |
 | `autorize tell <name> <message>` | Append operator guidance; the running loop injects it into the next iteration's prompt (see below). |
 | `autorize resume <name>` | Recover after a crash; any in-progress iter is recorded as `killed` and the loop continues. |
 | `autorize clean <name>`  | Tidy a finished/abandoned experiment: detach any worktree still holding the tracking branch checked out (the branch ref is preserved), drop stale staged indexes, prune dead worktree registrations (`--remove-worktrees` also deletes kept `wt/` checkouts). Leaves the log and records intact. |

@@ -26,7 +26,7 @@ pub enum Command {
     Run(run::RunArgs),
     /// Show experiment status from state.json + iterations.jsonl.
     Status(status::StatusArgs),
-    /// Dump every iteration as markdown (newest-first, with summaries);
+    /// Dump every iteration as markdown (oldest-first, with summaries);
     /// colorized on a TTY, plain markdown when piped.
     List(list::ListArgs),
     /// Append operator guidance, injected into the next iteration's prompt.

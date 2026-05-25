@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- `autorize list <name>` now lists iterations **oldest-first** (ascending iteration number) instead of newest-first, so reading top-to-bottom follows the experiment's chronological progression.
+
 ## [0.2.14] - 2026-05-24
 
 ### Added

@@ -21,7 +21,7 @@ pub enum ColorChoice {
 }
 
 #[derive(clap::Args, Debug)]
-/// Dump every iteration of an experiment as markdown, newest-first, one
+/// Dump every iteration of an experiment as markdown, oldest-first, one
 /// section per iteration carrying its model-written summary. Plain markdown
 /// when piped or redirected (zero ANSI escapes); ANSI-styled on a TTY.
 pub struct ListArgs {
@@ -79,9 +79,9 @@ fn render(
     };
     let _ = writeln!(s, "{}", maybe_dim(&meta, colorize));
 
-    // Newest-first: descending iteration number.
+    // Oldest-first: ascending iteration number.
     let mut ordered: Vec<&IterationRecord> = records.iter().collect();
-    ordered.sort_by_key(|r| std::cmp::Reverse(r.iter));
+    ordered.sort_by_key(|r| r.iter);
     for r in ordered {
         s.push('\n');
         let heading = maybe_bold(&format!("## Iteration {} \u{2014}", r.iter), colorize);
@@ -254,19 +254,20 @@ mod tests {
     }
 
     #[test]
-    fn render_several_newest_first_with_outcomes_and_scores() {
+    fn render_several_oldest_first_with_outcomes_and_scores() {
         let st = state_with_best(Some(3), Some(std::f64::consts::PI));
+        // Deliberately out of order on input to prove the renderer sorts.
         let recs = vec![
-            rec(1, Outcome::Merged, Some(3.20000), "first"),
-            rec(2, Outcome::Discarded, Some(3.50000), "regressed"),
             rec(3, Outcome::Merged, Some(std::f64::consts::PI), "best"),
+            rec(1, Outcome::Merged, Some(3.20000), "first"),
             rec(4, Outcome::Noop, None, "no diff"),
+            rec(2, Outcome::Discarded, Some(3.50000), "regressed"),
         ];
         let out = render("pi", &recs, Some(&st), false);
-        // Newest-first ordering: iter 4 must appear before iter 1.
+        // Oldest-first ordering: iter 1 must appear before iter 4.
         let p4 = out.find("## Iteration 4").expect("iter 4 missing");
         let p1 = out.find("## Iteration 1").expect("iter 1 missing");
-        assert!(p4 < p1, "expected newest-first ordering: {out}");
+        assert!(p1 < p4, "expected oldest-first ordering: {out}");
         // Outcome labels and 5-decimal scores.
         assert!(
             out.contains("## Iteration 3 \u{2014} merged \u{b7} 3.14159"),
