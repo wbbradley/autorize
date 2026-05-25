@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.12] - 2026-05-24
+
+### Changed
+
+- The default `summarize.command` now produces **tight, summary-only output** from Haiku. Previously the default passed the prompt as a *path* (`claude --model haiku --print {prompt_file}`, `stdin = "none"`), which made `claude` Read the file and answer in an interactive-assistant voice — prefacing summaries with `"I've read the file…"` and appending follow-up questions like `"What would you like to do next?"`. The default is now `claude --model haiku --print --tools "" --system-prompt "You are a terse summarizer. …"` with `stdin = "prompt"`: the prompt is piped on stdin (nothing to Read), a full `--system-prompt` replaces the agentic persona with a terse summarizer (no preamble, no markdown, no trailing questions), and `--tools ""` disables all tools. The summary-prompt body (`build_summary_prompt`) drops its in-body output instructions accordingly, since those now live in the system prompt. **Note:** `--bare` was deliberately *not* added — it forces API-key auth and never reads OAuth/keychain, which would silently break summarization for subscription-auth users. Existing experiments with their own `[summarize]` section are unaffected; only the built-in default and the scaffolding template change.
+
 ## [0.2.11] - 2026-05-24
 
 ### Changed
