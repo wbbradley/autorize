@@ -589,7 +589,13 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
                 env: BTreeMap::new(),
                 stdin: AgentStdin::Prompt,
             },
-            summarize: Summarize::default(),
+            // Summaries default to enabled; keep them off in the shared helper
+            // so non-summarize tests never spawn the real `claude` summarizer.
+            // The dedicated summarize tests opt in via `run_with_summarize`.
+            summarize: Summarize {
+                enabled: false,
+                ..Summarize::default()
+            },
         }
     }
 

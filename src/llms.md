@@ -180,6 +180,10 @@ weaker/cheaper) model to write a 1-2 sentence summary of what the iteration
 attempted and why the score moved. These summaries are surfaced to the agent in
 later iterations under a `## Recent attempt summaries` section of the prompt (so
 it can learn from discarded attempts) and by `autorize status` (`last summary`).
+It is **enabled by default** — even when the `[summarize]` section is absent the
+defaults kick in (`enabled = true`, `command = claude --model haiku --print
+{prompt_file}`), so existing experiments get summaries (and a one-time startup
+backfill) without editing their config; set `enabled = false` to opt out.
 
 The step runs **after** the worker is killed/exits, with its own `command` and
 `timeout` (independent of `iteration.budget`, so the summary is never truncated
@@ -211,8 +215,8 @@ after enabling `[summarize]` may fire many one-time, independent model calls.
 
 | Field     | Type     | Default | Notes                                                                                                                                                  |
 |-----------|----------|---------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `enabled` | bool     | `false` when the section is absent; `true` in the scaffolded template | Master switch. When `false`, the step is fully disabled (no behavior change beyond the existing `notes`). |
-| `command` | string   | (required when enabled) | Shell command for the summarizer. Same `{prompt_file}` / `{workdir}` / `{iter}` substitutions as `[agent]`. Must contain `{prompt_file}` when `stdin = "none"`. Default template uses `claude --model haiku --print {prompt_file}` (overridable). |
+| `enabled` | bool     | `true` (even when the section is absent) | Master switch. When `false`, the step is fully disabled (no behavior change beyond the existing `notes`). |
+| `command` | string   | `claude --model haiku --print {prompt_file}` | Shell command for the summarizer. Same `{prompt_file}` / `{workdir}` / `{iter}` substitutions as `[agent]`. Must contain `{prompt_file}` when `stdin = "none"`. Defaults to the Haiku `claude --print` command (overridable); set to `""` only if you also disable the step. |
 | `timeout` | duration | `"60s"` | humantime duration; hard wall-clock budget for the summarize command, independent of `iteration.budget`.                                              |
 | `stdin`   | enum     | `"none"` | `"none"` or `"prompt"`, mirroring `[agent].stdin`. `"none"` requires `{prompt_file}` in `command`.                                                     |
 

@@ -20,6 +20,13 @@ fn fixture_root() -> PathBuf {
 
 fn copy_example(dst: &Path) {
     copy_dir(&fixture_root(), dst);
+    // Summaries now default to enabled, which would spawn the real
+    // `claude --print` summarizer after each iteration. Keep the e2e suite
+    // hermetic (no network / external CLI) by explicitly disabling it.
+    let cfg_path = dst.join(".autorize/pi/config.toml");
+    let mut cfg = fs::read_to_string(&cfg_path).unwrap();
+    cfg.push_str("\n[summarize]\nenabled = false\n");
+    fs::write(&cfg_path, cfg).unwrap();
 }
 
 fn copy_dir(src: &Path, dst: &Path) {

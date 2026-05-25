@@ -85,7 +85,9 @@ mod tests {
         let summarize = if summarize_enabled {
             "\n[summarize]\nenabled = true\ncommand = \"echo SUMMARY_MARKER\"\nstdin = \"prompt\"\n"
         } else {
-            ""
+            // Summaries now default to enabled, so the disabled path must be
+            // requested explicitly rather than by omitting the section.
+            "\n[summarize]\nenabled = false\n"
         };
         let body = format!(
             r#"[experiment]

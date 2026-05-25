@@ -585,7 +585,12 @@ awk -v x="$v" 'BEGIN { pi=3.141592653589793; d=x-pi; if (d<0) d=-d; printf "%f\n
                 env: BTreeMap::new(),
                 stdin: AgentStdin::Prompt,
             },
-            summarize: Summarize::default(),
+            // Summaries default to enabled; keep them off here so the iteration
+            // machinery under test never tries to spawn the summarizer command.
+            summarize: Summarize {
+                enabled: false,
+                ..Summarize::default()
+            },
         }
     }
 

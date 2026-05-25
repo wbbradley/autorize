@@ -162,12 +162,14 @@ pub enum AgentStdin {
 /// own command and timeout (independent of `iteration.budget`), mirrors
 /// `[agent]`'s `{prompt_file}`/`{workdir}`/`{iter}` substitution and `stdin`
 /// modes, and is best-effort: any failure leaves the summary empty without
-/// affecting the iteration outcome. Disabled when the section is absent.
+/// affecting the iteration outcome. Enabled by default — even when the section
+/// is absent — using a Haiku-model `claude --print` command; set
+/// `enabled = false` to turn it off.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Summarize {
-    #[serde(default)]
+    #[serde(default = "default_summarize_enabled")]
     pub enabled: bool,
-    #[serde(default)]
+    #[serde(default = "default_summarize_command")]
     pub command: String,
     #[serde(with = "humantime_serde", default = "default_summarize_timeout")]
     pub timeout: Duration,
@@ -178,8 +180,8 @@ pub struct Summarize {
 impl Default for Summarize {
     fn default() -> Self {
         Self {
-            enabled: false,
-            command: String::new(),
+            enabled: default_summarize_enabled(),
+            command: default_summarize_command(),
             timeout: default_summarize_timeout(),
             stdin: AgentStdin::None,
         }
@@ -196,6 +198,14 @@ fn default_setup_timeout() -> Duration {
 
 fn default_teardown_timeout() -> Duration {
     Duration::from_secs(60)
+}
+
+fn default_summarize_enabled() -> bool {
+    true
+}
+
+fn default_summarize_command() -> String {
+    "claude --model haiku --print {prompt_file}".to_string()
 }
 
 fn default_summarize_timeout() -> Duration {
@@ -483,11 +493,16 @@ command = "claude --print {prompt_file}"
     }
 
     #[test]
-    fn summarize_disabled_by_default_when_section_absent() {
-        // base_toml has no [summarize] — it must default to disabled, which is
-        // the back-compatible no-op behavior for pre-existing experiments.
+    fn summarize_enabled_by_default_when_section_absent() {
+        // base_toml has no [summarize] — it must default to enabled with the
+        // Haiku `claude --print` command, so existing experiments get summaries
+        // without having to add the section.
         let cfg = Config::from_toml(&base_toml()).unwrap();
-        assert!(!cfg.summarize.enabled);
+        assert!(cfg.summarize.enabled);
+        assert_eq!(
+            cfg.summarize.command,
+            "claude --model haiku --print {prompt_file}"
+        );
         assert_eq!(cfg.summarize.timeout, Duration::from_secs(60));
         assert_eq!(cfg.summarize.stdin, AgentStdin::None);
     }
@@ -513,8 +528,13 @@ command = "claude --print {prompt_file}"
     }
 
     #[test]
-    fn rejects_enabled_summarize_without_command() {
-        let s = format!("{}\n[summarize]\nenabled = true\n", base_toml());
+    fn rejects_enabled_summarize_with_empty_command() {
+        // Omitting `command` now falls back to the default Haiku command, so to
+        // exercise the non-empty validation the command must be explicitly blank.
+        let s = format!(
+            "{}\n[summarize]\nenabled = true\ncommand = \"\"\n",
+            base_toml()
+        );
         let err = Config::from_toml(&s).unwrap_err();
         assert!(format!("{err}").contains("summarize.command"), "got: {err}");
     }

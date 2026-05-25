@@ -104,6 +104,9 @@ workdir_var = "AUTORIZE_WORKDIR"
 stdin = "prompt"
 
 [agent.env]
+
+[summarize]
+enabled = false
 "#
     );
     let exp_dir = p.join(".autorize").join("sig");

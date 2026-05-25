@@ -205,8 +205,8 @@ stdin       = "none"                            # "none" | "prompt"
 [agent.env]
 ANTHROPIC_API_KEY = "$ANTHROPIC_API_KEY"
 
-[summarize]                                     # optional; recap each iteration
-enabled = true                                  #   with a separate cheap model
+[summarize]                                     # on by default; recap each
+enabled = true                                  #   iteration with a cheap model
 command = "claude --model haiku --print {prompt_file}"
 timeout = "60s"
 stdin   = "none"
