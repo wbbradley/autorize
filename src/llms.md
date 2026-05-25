@@ -210,15 +210,20 @@ clean`), runs the summarize command from the project root, and rewrites
 `iterations.jsonl` in place (atomic full rewrite under the run lock) plus the
 per-iter `summary.md`. It is best-effort — it skips `noop`/`killed` records and
 records whose `iter-NNNN/` artifacts are gone, and a single failure logs a
-warning and continues without aborting the run. There is no flag; the first run
-after enabling `[summarize]` may fire many one-time, independent model calls.
+warning and continues without aborting the run. The startup pass takes no flag
+and only fills records *missing* a summary; the first run after enabling
+`[summarize]` may fire many one-time, independent model calls. To re-summarize
+records that already have a summary (e.g. after changing `summarize.command`),
+run the maintenance command `autorize backfill <name> --force`, which
+regenerates *every* eligible record (still skipping `noop`/`killed` and
+missing-artifact records).
 
 | Field     | Type     | Default | Notes                                                                                                                                                  |
 |-----------|----------|---------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `enabled` | bool     | `true` (even when the section is absent) | Master switch. When `false`, the step is fully disabled (no behavior change beyond the existing `notes`). |
-| `command` | string   | `claude --model haiku --print {prompt_file}` | Shell command for the summarizer. Same `{prompt_file}` / `{workdir}` / `{iter}` substitutions as `[agent]`. Must contain `{prompt_file}` when `stdin = "none"`. Defaults to the Haiku `claude --print` command (overridable); set to `""` only if you also disable the step. |
+| `command` | string   | `claude --model haiku --print --tools "" --system-prompt "You are a terse summarizer. …"` | Shell command for the summarizer. Same `{prompt_file}` / `{workdir}` / `{iter}` substitutions as `[agent]`. Must contain `{prompt_file}` when `stdin = "none"`. The default pipes the prompt on stdin (so no `{prompt_file}`), disables tools, and pins a terse summarizer persona via `--system-prompt` so output is summary-only — no "I've read the file…" preamble or trailing follow-up questions. Overridable; set to `""` only if you also disable the step. |
 | `timeout` | duration | `"60s"` | humantime duration; hard wall-clock budget for the summarize command, independent of `iteration.budget`.                                              |
-| `stdin`   | enum     | `"none"` | `"none"` or `"prompt"`, mirroring `[agent].stdin`. `"none"` requires `{prompt_file}` in `command`.                                                     |
+| `stdin`   | enum     | `"prompt"` | `"none"` or `"prompt"`, mirroring `[agent].stdin`. `"none"` requires `{prompt_file}` in `command`; `"prompt"` pipes the prompt on stdin (the default).  |
 
 ## 5. `objective.parse` variants
 

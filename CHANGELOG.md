@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.13] - 2026-05-24
+
+### Added
+
+- `autorize backfill <name> --force` regenerates summaries for *every* eligible record, overwriting existing ones, instead of only filling records that are missing a summary. Use it to re-summarize a whole experiment after changing `summarize.command` (e.g. to replace chatty summaries written by the old default). `noop`/`killed` records and records whose `iter-NNNN/` artifacts are gone are still skipped. The automatic startup backfill in `autorize run` / `resume` is unchanged — it never overwrites and still only fills missing summaries.
+
 ## [0.2.12] - 2026-05-24
 
 ### Changed

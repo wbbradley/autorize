@@ -207,9 +207,9 @@ ANTHROPIC_API_KEY = "$ANTHROPIC_API_KEY"
 
 [summarize]                                     # on by default; recap each
 enabled = true                                  #   iteration with a cheap model
-command = "claude --model haiku --print {prompt_file}"
+command = 'claude --model haiku --print --tools "" --system-prompt "You are a terse summarizer. Output exactly 1-2 sentences naming the change and why it moved the score. No preamble, no markdown, no questions, no offer of further help."'
 timeout = "60s"
-stdin   = "none"
+stdin   = "prompt"                              # prompt piped on stdin (default)
 ```
 
 When `[summarize]` is enabled, each iteration's recap is surfaced to the agent
