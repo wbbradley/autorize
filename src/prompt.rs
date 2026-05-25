@@ -139,11 +139,14 @@ const SUMMARY_MAX_STDIO_LINES: usize = 80;
 /// guidance or prior summaries, so it can run cheaply.
 pub fn build_summary_prompt(ctx: &SummaryContext) -> String {
     let mut s = String::new();
+    // The summarizer's persona and output constraints (terse, no preamble, no
+    // markdown, no follow-up questions) live in the command's `--system-prompt`
+    // (see `default_summarize_command`). This body is the user turn: a one-line
+    // task framing followed by the iteration's data.
     s.push_str(
-        "You are summarizing one iteration of an automated code-improvement run. \
-         In 1-2 sentences, state what this iteration attempted and why it moved \
-         the score the way it did. Be concrete and specific about the change. \
-         Output only the summary text \u{2014} no preamble, no markdown headers.\n\n",
+        "Summarize this iteration of an automated code-improvement run in 1-2 \
+         sentences: what it changed and why the score moved the way it did. Be \
+         concrete and specific about the change.\n\n",
     );
 
     let _ = writeln!(s, "## Outcome");

@@ -163,8 +163,9 @@ pub enum AgentStdin {
 /// `[agent]`'s `{prompt_file}`/`{workdir}`/`{iter}` substitution and `stdin`
 /// modes, and is best-effort: any failure leaves the summary empty without
 /// affecting the iteration outcome. Enabled by default — even when the section
-/// is absent — using a Haiku-model `claude --print` command; set
-/// `enabled = false` to turn it off.
+/// is absent — using a Haiku-model `claude --print` command that pipes the
+/// prompt on stdin (`stdin = "prompt"`) and pins a terse summarizer persona via
+/// `--system-prompt`; set `enabled = false` to turn it off.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Summarize {
     #[serde(default = "default_summarize_enabled")]
@@ -173,7 +174,7 @@ pub struct Summarize {
     pub command: String,
     #[serde(with = "humantime_serde", default = "default_summarize_timeout")]
     pub timeout: Duration,
-    #[serde(default)]
+    #[serde(default = "default_summarize_stdin")]
     pub stdin: AgentStdin,
 }
 
@@ -183,7 +184,7 @@ impl Default for Summarize {
             enabled: default_summarize_enabled(),
             command: default_summarize_command(),
             timeout: default_summarize_timeout(),
-            stdin: AgentStdin::None,
+            stdin: default_summarize_stdin(),
         }
     }
 }
@@ -205,7 +206,17 @@ fn default_summarize_enabled() -> bool {
 }
 
 fn default_summarize_command() -> String {
-    "claude --model haiku --print {prompt_file}".to_string()
+    // The prompt is piped on stdin (see `default_summarize_stdin`), not passed
+    // as a path: handing `claude --print` a bare path makes it Read the file
+    // and narrate ("I've read the file…") in an interactive-assistant voice.
+    // A full `--system-prompt` replaces that agentic persona with a terse
+    // summarizer (no preamble, no trailing "what would you like to do?"), and
+    // `--tools ""` disables all tools so there is nothing to narrate.
+    r#"claude --model haiku --print --tools "" --system-prompt "You are a terse summarizer. Output exactly 1-2 sentences naming the change and why it moved the score. No preamble, no markdown, no questions, no offer of further help.""#.to_string()
+}
+
+fn default_summarize_stdin() -> AgentStdin {
+    AgentStdin::Prompt
 }
 
 fn default_summarize_timeout() -> Duration {
@@ -496,15 +507,16 @@ command = "claude --print {prompt_file}"
     fn summarize_enabled_by_default_when_section_absent() {
         // base_toml has no [summarize] — it must default to enabled with the
         // Haiku `claude --print` command, so existing experiments get summaries
-        // without having to add the section.
+        // without having to add the section. The default pipes the prompt on
+        // stdin and pins a terse summarizer persona via --system-prompt.
         let cfg = Config::from_toml(&base_toml()).unwrap();
         assert!(cfg.summarize.enabled);
-        assert_eq!(
-            cfg.summarize.command,
-            "claude --model haiku --print {prompt_file}"
-        );
+        assert!(cfg.summarize.command.contains("--model haiku"));
+        assert!(cfg.summarize.command.contains("--system-prompt"));
+        assert!(cfg.summarize.command.contains(r#"--tools """#));
+        assert!(!cfg.summarize.command.contains("{prompt_file}"));
         assert_eq!(cfg.summarize.timeout, Duration::from_secs(60));
-        assert_eq!(cfg.summarize.stdin, AgentStdin::None);
+        assert_eq!(cfg.summarize.stdin, AgentStdin::Prompt);
     }
 
     #[test]
@@ -524,7 +536,8 @@ command = "claude --print {prompt_file}"
     fn default_template_enables_summarize() {
         let cfg = Config::from_toml(&render_config("foo")).unwrap();
         assert!(cfg.summarize.enabled);
-        assert!(cfg.summarize.command.contains("{prompt_file}"));
+        assert!(cfg.summarize.command.contains("--system-prompt"));
+        assert_eq!(cfg.summarize.stdin, AgentStdin::Prompt);
     }
 
     #[test]

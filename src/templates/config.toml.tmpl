@@ -88,6 +88,11 @@ ANTHROPIC_API_KEY = "$ANTHROPIC_API_KEY"
 # summarizer inherits [agent.env]. Set `enabled = false` to disable.
 [summarize]
 enabled = true
-command = "claude --model haiku --print {prompt_file}"
+# The prompt is piped on stdin (stdin = "prompt"), not passed as a path:
+# `claude --print <path>` makes the model Read the file and reply in an
+# interactive voice ("I've read the file…", trailing "what next?"). A full
+# --system-prompt pins a terse summarizer persona, and --tools "" leaves it
+# nothing to narrate. Use single quotes so the embedded "" survive TOML.
+command = 'claude --model haiku --print --tools "" --system-prompt "You are a terse summarizer. Output exactly 1-2 sentences naming the change and why it moved the score. No preamble, no markdown, no questions, no offer of further help."'
 timeout = "60s"
-stdin = "none"
+stdin = "prompt"
