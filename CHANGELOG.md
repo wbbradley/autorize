@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- New `autorize list <name>` subcommand: a read-only sibling to `autorize status` that dumps every iteration as markdown, newest-first, with one `##` section per iteration carrying its model-written `summary` (or a `_(no summary)_` placeholder). A title line and a dimmed meta line (`_<N> iterations · best <score> (iter <n>)_`, sourced from `state.json`) head the output. When stdout is a real terminal the headings, meta line, and per-iteration outcome are ANSI-styled (merged→green, discarded→yellow, noop→dim, invalid/killed/denied→red) via `owo-colors`; when piped or redirected the output is clean markdown with zero ANSI escapes, suitable for writing to a `.md` file. `--color <auto|always|never>` (default `auto`) overrides the TTY detection. A missing `state.json` is not fatal (the best clause is simply omitted), and a zero-iteration experiment prints `_No iterations yet._`.
+
 ## [0.2.13] - 2026-05-24
 
 ### Added

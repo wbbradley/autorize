@@ -87,6 +87,7 @@ mod tests {
             "autorize init",
             "autorize run",
             "autorize status",
+            "autorize list",
             "autorize tell",
             "autorize resume",
             "autorize clean",

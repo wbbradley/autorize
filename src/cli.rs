@@ -1,6 +1,7 @@
 pub mod backfill;
 pub mod clean;
 pub mod init;
+pub mod list;
 pub mod llms;
 pub mod resume;
 pub mod run;
@@ -25,6 +26,9 @@ pub enum Command {
     Run(run::RunArgs),
     /// Show experiment status from state.json + iterations.jsonl.
     Status(status::StatusArgs),
+    /// Dump every iteration as markdown (newest-first, with summaries);
+    /// colorized on a TTY, plain markdown when piped.
+    List(list::ListArgs),
     /// Append operator guidance, injected into the next iteration's prompt.
     Tell(tell::TellArgs),
     /// Resume an experiment after a crash or stop.
@@ -43,6 +47,7 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
         Command::Llms(a) => llms::run(a),
         Command::Run(a) => run::run(a),
         Command::Status(a) => status::run(a),
+        Command::List(a) => list::run(a),
         Command::Tell(a) => tell::run(a),
         Command::Resume(a) => resume::run(a),
         Command::Clean(a) => clean::run(a),

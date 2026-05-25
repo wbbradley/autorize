@@ -817,3 +817,35 @@ Wired into `src/cli.rs` with `pub mod backfill;`, a `Backfill` variant marked
 Tests: 3 new in `src/cli/backfill.rs` (missing-experiment error, disabled-is-noop
 leaves the log untouched, happy-path fills `iterations.jsonl` + `summary.md`).
 `chk` clean; full suite green.
+
+## `autorize list <name>` — iterations + summaries as markdown (2026-05-24)
+
+Added a read-only `autorize list <name>` subcommand: a sibling to `autorize
+status` that dumps every iteration as markdown, newest-first, one `##` section
+per iteration carrying its model-written `summary` (or a `_(no summary)_`
+placeholder). Output is headed by a bold title (`# Experiment: <name>`) and a
+dimmed meta line (`_<N> iterations · best <score> (iter <n>)_`, sourced from
+`state.json` so it honors `objective.direction`). Scores follow the existing
+convention — em-dash for `None`, else 5 decimals.
+
+New `src/cli/list.rs` factors a pure `render(name, records, state, colorize) ->
+String` so tests assert on plain output without a PTY; `run` resolves paths,
+reads `iterations.jsonl` + (optional) `state.json`, and decides `colorize`. A
+missing `state.json` is non-fatal (best clause omitted); zero iterations prints
+`_No iterations yet._`. Colorization uses `owo-colors` (added via `cargo add`):
+bold headings, dimmed meta, outcome colored (merged→green, discarded→yellow,
+noop→dim, invalid/killed/denied→red). Detection deviates from the planned
+`if_supports_color`/`set_override` in favor of an explicit `colorize: bool`
+gate plus std `IsTerminal` for `auto` — deterministic and test-friendly, no
+process-global state. A `--color <auto|always|never>` flag (clap `ValueEnum`,
+default `auto`) overrides detection.
+
+Wired into `src/cli.rs` (`pub mod list;`, `List` variant, dispatch arm).
+Documented in `src/llms.md` + `README.md` subcommands tables and a `CHANGELOG.md`
+`[Unreleased]` entry; extended the `llms.rs` `mentions_all_subcommands` test.
+
+Tests: 8 new in `src/cli/list.rs` covering 0/1/several iterations, newest-first
+ordering, multiple outcomes, em-dash vs 5-decimal scores, the empty-summary and
+state-absent paths, and plain-has-no-ANSI / colorized-has-ANSI. Verified against
+the real binary (piped → clean markdown; `--color always` → ANSI). `chk` clean;
+full suite green (223 tests).
