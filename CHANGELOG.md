@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.10] - 2026-05-24
+
+### Added
+
+- New hidden `autorize backfill <name>` maintenance subcommand. It runs the same missing-summary backfill that `autorize run` / `resume` perform at startup, but as a one-shot that exits immediately — so you can fill in summaries for a *stopped* experiment without having to start (and then stop) a run. It acquires the experiment lock for the duration of the call, so it never races a live `autorize run` that is appending to `iterations.jsonl` (a concurrent run makes it fail fast with the lock error rather than corrupting the log). With `[summarize]` disabled it prints a no-op message and exits 0 without touching any file; otherwise it reports whether any summaries were written. The command is intentionally omitted from `autorize --help` as an internal utility.
+
 ## [0.2.9] - 2026-05-24
 
 ### Added
