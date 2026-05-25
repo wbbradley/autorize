@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.11] - 2026-05-24
+
+### Changed
+
+- `[summarize]` is now **enabled by default**, even when the section is absent: `summarize.enabled` defaults to `true` and `summarize.command` defaults to `claude --model haiku --print {prompt_file}` (Haiku via `claude --print`). Previously summarization was off unless a config opted in. Existing experiments without a `[summarize]` section now get per-iteration summaries automatically — and, on the next `autorize run` / `resume` (or `autorize backfill <name>`), a one-time startup backfill that may fire many independent Haiku calls to fill in summaries for past iterations. To keep the old behavior, add `[summarize]\nenabled = false` to the experiment's `config.toml`. The command inherits `[agent.env]` for credentials (e.g. `ANTHROPIC_API_KEY`), as before.
+
 ## [0.2.10] - 2026-05-24
 
 ### Added
