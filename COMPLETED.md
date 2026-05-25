@@ -794,3 +794,26 @@ running-best-context test (stub `cat` summarizer echoes the prompt to assert eac
 record saw the correct prior best). prompt.rs snapshot/structural tests updated
 to assert the best section is gone. 210 unit + e2e + signal tests pass; `chk`
 clean.
+
+## Hidden `autorize backfill <name>` subcommand (2026-05-24)
+
+Added a one-shot, hidden maintenance subcommand so an operator can fill missing
+iteration summaries on a *stopped* experiment without starting (and stopping) a
+run. New `src/cli/backfill.rs` mirrors the `tell`/`status` shape: `run` resolves
+`project_root` via `env::current_dir()`, delegating to a unit-testable
+`run_with_root(args, project_root)`. It does the existence check, acquires the
+experiment lock (`ExperimentLock::acquire`, held for the call's duration so the
+internal `storage::rewrite_iterations` can't race a live `run` — a held flock
+fails fast with `Error::Locked`), loads config, and calls
+`iteration::backfill_missing_summaries`. With `[summarize] enabled = false` it
+prints `summarize is disabled in config; nothing to backfill` and exits 0
+without touching any file; otherwise it prints `backfilled missing summaries`
+or `no missing summaries to backfill` based on the returned bool. No change to
+`backfill_missing_summaries`' signature or the startup-backfill behavior.
+
+Wired into `src/cli.rs` with `pub mod backfill;`, a `Backfill` variant marked
+`#[command(hide = true)]` (absent from `--help`), and a dispatch arm.
+
+Tests: 3 new in `src/cli/backfill.rs` (missing-experiment error, disabled-is-noop
+leaves the log untouched, happy-path fills `iterations.jsonl` + `summary.md`).
+`chk` clean; full suite green.

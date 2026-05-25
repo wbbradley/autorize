@@ -1,3 +1,4 @@
+pub mod backfill;
 pub mod clean;
 pub mod init;
 pub mod llms;
@@ -31,6 +32,9 @@ pub enum Command {
     /// Tidy a finished/abandoned experiment: free the tracking branch, drop
     /// stale staged indexes, and prune dead worktree registrations.
     Clean(clean::CleanArgs),
+    /// (hidden) Backfill missing iteration summaries once, then exit.
+    #[command(hide = true)]
+    Backfill(backfill::BackfillArgs),
 }
 
 pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
@@ -42,5 +46,6 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
         Command::Tell(a) => tell::run(a),
         Command::Resume(a) => resume::run(a),
         Command::Clean(a) => clean::run(a),
+        Command::Backfill(a) => backfill::run(a),
     }
 }
